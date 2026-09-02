@@ -86,3 +86,16 @@ graphify-out/*
 .codegraph/
 .PR/
 .next-analyze/*
+
+# Tooling and agent runtime cache
+.omc/
+**/.omc/
+.docsgen/
+__pycache__/
+*.pyc
+*.orig
+vitest-out.json
+
+# Deployed by ACS patch system
+open-sse/executors/kiroAnthropicSse.js
+open-sse/rtk/cacheBreakpoints.js
