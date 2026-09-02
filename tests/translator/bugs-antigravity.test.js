@@ -194,4 +194,40 @@ describe("Antigravity executor", () => {
       expect(contents[i].role, `Consecutive duplicate role at index ${i}`).not.toBe(contents[i + 1].role);
     }
   });
+
+  it("ensures nested array schemas have valid items to prevent 400 INVALID_ARGUMENT (e.g. query.where.items.items)", () => {
+    const out = new AntigravityExecutor().transformRequest("gemini-3.8-flash-low", {
+      request: {
+        contents: [{ role: "user", parts: [{ text: "hi" }] }],
+        tools: [{
+          functionDeclarations: [{
+            name: "query_db",
+            description: "query database",
+            parameters: {
+              type: "object",
+              properties: {
+                query: {
+                  type: "object",
+                  properties: {
+                    where: {
+                      type: "array",
+                      items: {
+                        type: "array",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          }],
+        }],
+      },
+    }, true, { projectId: "project-1", connectionId: "conn-1" });
+
+    const where = out.request.tools[0].functionDeclarations[0].parameters.properties.query.properties.where;
+    expect(where.type).toBe("array");
+    expect(where.items.type).toBe("array");
+    expect(where.items.items).toBeDefined();
+    expect(where.items.items.type).toBe("string");
+  });
 });

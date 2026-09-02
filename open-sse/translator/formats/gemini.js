@@ -147,7 +147,16 @@ function removeUnsupportedKeywords(obj, keywords) {
     return;
   }
 
+  // Property name-map: keys are user-defined parameter names. Descend into
+  // each value (which is a schema node) but never delete the key itself.
+  if (obj.properties && typeof obj.properties === "object" && !Array.isArray(obj.properties)) {
+    for (const propValue of Object.values(obj.properties)) {
+      removeUnsupportedKeywords(propValue, keywords);
+    }
+  }
+
   for (const key of Object.keys(obj)) {
+    if (key === "properties") continue;
     if (keywords.includes(key) || key.startsWith("x-")) {
       delete obj[key];
       continue;
@@ -303,11 +312,55 @@ function flattenTypeArrays(obj) {
   }
 }
 
-// Infer missing type=object when properties exist (Gemini requires explicit type)
+// Infer missing type=object when properties exist (Gemini requires explicit type).
+// Descends only into schema nodes — the property name-map is NOT a schema node.
 function ensureObjectType(obj) {
   if (!obj || typeof obj !== "object") return;
   if (obj.properties && !obj.type) obj.type = "object";
-  for (const v of Object.values(obj)) if (v && typeof v === "object") ensureObjectType(v);
+  if (obj.properties && typeof obj.properties === "object" && !Array.isArray(obj.properties)) {
+    for (const propValue of Object.values(obj.properties)) {
+      ensureObjectType(propValue);
+    }
+  }
+  for (const [key, value] of Object.entries(obj)) {
+    if (key === "properties") continue;
+    if (value && typeof value === "object") ensureObjectType(value);
+  }
+}
+
+// Ensure array schemas have a valid items object (Gemini strictly requires items for type: array).
+// Also handles nested arrays (e.g. 2D arrays where.items.items) and tuple array schemas.
+function ensureArrayItems(obj) {
+  if (!obj || typeof obj !== "object") return;
+
+  if (obj.properties && typeof obj.properties === "object" && !Array.isArray(obj.properties)) {
+    for (const propValue of Object.values(obj.properties)) {
+      ensureArrayItems(propValue);
+    }
+  }
+
+  if (obj.type === "array") {
+    if (!obj.items || typeof obj.items !== "object") {
+      obj.items = { type: "string" };
+    } else if (Array.isArray(obj.items)) {
+      obj.items = obj.items.length > 0 && typeof obj.items[0] === "object" ? obj.items[0] : { type: "string" };
+    } else if (Object.keys(obj.items).length === 0) {
+      obj.items = { type: "string" };
+    }
+
+    if (!obj.items.type && !obj.items.properties) {
+      obj.items.type = "string";
+    }
+
+    ensureArrayItems(obj.items);
+  }
+
+  for (const [key, value] of Object.entries(obj)) {
+    if (key === "properties") continue;
+    if (value && typeof value === "object") {
+      ensureArrayItems(value);
+    }
+  }
 }
 
 // Clean JSON Schema for Antigravity API compatibility - removes unsupported keywords recursively
@@ -329,12 +382,21 @@ export function cleanJSONSchemaForAntigravity(schema) {
   // Phase 2.5: Infer missing type=object when properties exist (Gemini requirement)
   ensureObjectType(cleaned);
 
+  // Phase 2.6: Ensure array schemas have valid items (Gemini requirement)
+  ensureArrayItems(cleaned);
+
   // Phase 3: Remove all unsupported keywords at ALL levels (including inside arrays)
   removeUnsupportedKeywords(cleaned, UNSUPPORTED_SCHEMA_CONSTRAINTS);
 
   // Phase 4: Cleanup required fields recursively
   function cleanupRequired(obj) {
     if (!obj || typeof obj !== "object") return;
+
+    if (obj.properties && typeof obj.properties === "object" && !Array.isArray(obj.properties)) {
+      for (const propValue of Object.values(obj.properties)) {
+        cleanupRequired(propValue);
+      }
+    }
 
     if (obj.required && Array.isArray(obj.required) && obj.properties) {
       const validRequired = obj.required.filter(field =>
@@ -348,7 +410,8 @@ export function cleanJSONSchemaForAntigravity(schema) {
     }
 
     // Recurse into nested objects
-    for (const value of Object.values(obj)) {
+    for (const [key, value] of Object.entries(obj)) {
+      if (key === "properties") continue;
       if (value && typeof value === "object") {
         cleanupRequired(value);
       }
@@ -360,6 +423,12 @@ export function cleanJSONSchemaForAntigravity(schema) {
   // Phase 5: Add placeholder for empty object schemas (Antigravity requirement)
   function addPlaceholders(obj) {
     if (!obj || typeof obj !== "object") return;
+
+    if (obj.properties && typeof obj.properties === "object" && !Array.isArray(obj.properties)) {
+      for (const propValue of Object.values(obj.properties)) {
+        addPlaceholders(propValue);
+      }
+    }
 
     // Empty schema {} (no type, no properties) after $ref removal — treat as object with placeholder
     if (Object.keys(obj).length === 0) {
@@ -387,7 +456,8 @@ export function cleanJSONSchemaForAntigravity(schema) {
     }
 
     // Recurse into nested objects
-    for (const value of Object.values(obj)) {
+    for (const [key, value] of Object.entries(obj)) {
+      if (key === "properties") continue;
       if (value && typeof value === "object") {
         addPlaceholders(value);
       }
@@ -395,6 +465,9 @@ export function cleanJSONSchemaForAntigravity(schema) {
   }
 
   addPlaceholders(cleaned);
+
+  // Phase 6: Final pass for any arrays that may have had items cleared or nested arrays
+  ensureArrayItems(cleaned);
 
   return cleaned;
 }
