@@ -99,3 +99,7 @@ vitest-out.json
 # Deployed by ACS patch system
 open-sse/executors/kiroAnthropicSse.js
 open-sse/rtk/cacheBreakpoints.js
+
+# Kiro local workspace state
+.kiro/
+
