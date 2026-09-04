@@ -33,4 +33,9 @@ describe("Gemini 3.8 Flash Support & Config", () => {
     expect(MODEL_PRICING["gemini-3.8-flash-medium"]).toEqual(MODEL_PRICING["gemini-3.7-flash-medium"]);
     expect(MODEL_PRICING["gemini-3.8-flash-low"]).toEqual(MODEL_PRICING["gemini-3.7-flash-low"]);
   });
+
+  it("maps gemini-3.5-flash-high to gemini-3-flash-agent upstream", () => {
+    const model = antigravityRegistry.models.find(m => m.id === "gemini-3.5-flash-high");
+    expect(model?.upstreamModelId).toBe("gemini-3-flash-agent");
+  });
 });
