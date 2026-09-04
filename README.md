@@ -1,3 +1,15 @@
+> [!NOTE]
+> ### 🇮🇩 Misi Fork: Fast-Track Critical Patches & Continuous Stability
+> Repositori ini adalah fork aktif dari [decolua/9router](https://github.com/decolua/9router) yang didedikasikan untuk menerapkan **fast-update patches** mendesak selagi menunggu rilis resmi dari upstream.
+>
+> - ⚡ **Fast-Track Hotfixes**: Mengintegrasikan patch krusial secara cepat (seperti pembaruan client fingerprint Antigravity, koreksi upstream wire model Gemini 3.8 & 3.5 Flash, penyesuaian kuota, dan OAuth fixes).
+> - 🛡️ **Reliabilitas Tanpa Henti**: Memastikan koneksi routing ke seluruh AI developer tools (Claude Code, Cursor, Codex, Copilot, dll.) tetap lancar tanpa downtime.
+> - 🔄 **Selaras dengan Upstream**: Tetap tersinkronisasi berkala dengan branch `master` upstream dan mengutamakan perubahan yang minimal, bersih, serta teruji.
+>
+> *This fork delivers immediate hotfixes and essential patches so your AI routing workflow remains completely uninterrupted while official upstream updates are pending.*
+
+---
+
 <div align="center">
   <img src="./images/9router.png?1" alt="9Router Dashboard" width="800"/>
   
