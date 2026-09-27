@@ -1,20 +1,18 @@
 > [!TIP]
 > ### 📦 Panduan Instalasi Cepat untuk Pengguna [ACS (Agnostic Config Suites)](https://uikode.com/acs/)
-> Untuk mendapatkan seluruh stabilitas patch produksi ini tanpa menunggu antrean rilis npm resmi, jalankan perintah instalasi berikut di terminal Anda:
+> Untuk mendapatkan seluruh stabilitas patch produksi ini secara instan, bersih, dan tanpa perlu compile Next.js lokal, gunakan release tarball prebuilt resmi di bawah ini:
 >
 > ```bash
-> # Opsi 1: Instalasi Global langsung dari Repositori GitHub Resmi Fork (Direkomendasikan)
-> npm install -g https://github.com/andyvandaric/9router.git
+> # Opsi 1: Instalasi Global Paket Prebuilt (Direkomendasikan — Bersih, Cepat, Zero-Build)
+> npm install -g https://github.com/andyvandaric/9router/releases/download/v0.5.91-andyvandaric-patch/9router-0.5.91.tgz
 >
-> # Opsi 2: Jalankan Instan via npx (Tanpa instalasi permanen)
-> npx https://github.com/andyvandaric/9router.git
+> # Opsi 2: Jalankan Langsung via npx
+> npx https://github.com/andyvandaric/9router/releases/download/v0.5.91-andyvandaric-patch/9router-0.5.91.tgz
 >
-> # Opsi 3: Clone & Build Lokal (Khusus kontributor / pengembang)
-> git clone https://github.com/andyvandaric/9router.git
-> cd 9router
-> npm install && npm link
+> # Opsi 3: Pengguna Dashboard ACS
+> # Cukup klik Start pada Service 9router di dashboard ACS (otomatis termanage).
 > ```
-> *Setelah instalasi selesai, cukup jalankan `acs service start 9router` atau kelola otomatis langsung melalui dashboard [ACS](https://uikode.com/acs/). Service aktif di `http://localhost:20128` dengan konfigurasi hardening OpenCode, Claude Code CLI, dan Antigravity yang langsung aktif secara bawaan.*
+> *Setelah instalasi selesai, cukup jalankan `acs service start 9router` atau jalankan `9router`. Service aktif di `http://localhost:20128` dengan konfigurasi hardening OpenCode, Claude Code CLI, dan Antigravity yang langsung aktif secara bawaan.*
 
 ---
 
