@@ -211,8 +211,32 @@ export function kiroToClaudeResponse(chunk, state) {
 
     if (state.toolCalls) {
       for (const [idx, toolInfo] of state.toolCalls) {
-        const buffered = state.toolArgBuffers?.get(idx);
+        let buffered = state.toolArgBuffers?.get(idx);
         if (buffered) {
+          if (typeof buffered === "string" && buffered.includes("}{")) {
+            const splitIdx = buffered.indexOf("}{");
+            buffered = buffered.slice(0, splitIdx + 1);
+          }
+          try {
+            const parsed = JSON.parse(buffered);
+            if (toolInfo.name === "Read" || toolInfo.name === "Edit" || toolInfo.name === "Write") {
+              if (!parsed.file_path || typeof parsed.file_path !== "string") {
+                const alias = parsed.path || parsed.filePath || parsed.file || parsed.filename || parsed.target;
+                if (alias && typeof alias === "string") {
+                  parsed.file_path = alias;
+                  delete parsed.path; delete parsed.filePath; delete parsed.file; delete parsed.filename; delete parsed.target;
+                }
+              }
+            } else if (toolInfo.name === "Bash") {
+              if (typeof parsed.command !== "string") {
+                parsed.command = typeof parsed.cmd === "string" ? parsed.cmd
+                  : typeof parsed.input === "string" ? parsed.input
+                  : typeof parsed.script === "string" ? parsed.script : "";
+                delete parsed.cmd; delete parsed.input; delete parsed.script;
+              }
+            }
+            buffered = JSON.stringify(parsed);
+          } catch {}
           results.push({
             type: "content_block_delta",
             index: toolInfo.blockIndex,

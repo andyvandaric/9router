@@ -12,30 +12,66 @@ const CLAUDE_OAUTH_TOOL_PREFIX = "proxy_";
 
 // Sanitize tool call arguments to fix bad params from non-Anthropic models
 function sanitizeToolArgs(toolName, argsJson) {
+  let cleanedJson = argsJson;
+  // Recover from concatenated JSON emitted by upstream multi-turn replays: {...}{...}
+  if (typeof cleanedJson === "string" && cleanedJson.includes("}{")) {
+    const splitIdx = cleanedJson.indexOf("}{");
+    cleanedJson = cleanedJson.slice(0, splitIdx + 1);
+  }
+
   try {
-    const args = JSON.parse(argsJson);
+    const args = JSON.parse(cleanedJson);
     const name = toolName.startsWith(CLAUDE_OAUTH_TOOL_PREFIX)
       ? toolName.slice(CLAUDE_OAUTH_TOOL_PREFIX.length)
       : toolName;
     if (name === "Read") sanitizeReadArgs(args);
     else if (FILE_PATH_TOOLS.has(name)) sanitizeFilePathArg(args);
+    else if (name === "Bash") sanitizeBashArgs(args);
     return JSON.stringify(args);
   } catch {
-    return argsJson;
+    return cleanedJson;
   }
+}
+
+function sanitizeBashArgs(args) {
+  if (typeof args.command === "string") return;
+  const cmd = typeof args.cmd === "string" ? args.cmd
+    : typeof args.input === "string" ? args.input
+    : typeof args.script === "string" ? args.script : "";
+  args.command = cmd;
+  delete args.cmd;
+  delete args.input;
+  delete args.script;
 }
 
 const FILE_PATH_TOOLS = new Set(["Read", "Edit", "Write"]);
 
 function sanitizeFilePathArg(args) {
-  if (typeof args.file_path === "string" && args.file_path) return;
-  const alias = typeof args.path === "string" && args.path ? args.path
-    : typeof args.filePath === "string" && args.filePath ? args.filePath : null;
+  if (typeof args.file_path === "string" && args.file_path.trim()) {
+    args.file_path = args.file_path.trim();
+    return;
+  }
+  const alias = typeof args.path === "string" && args.path.trim() ? args.path.trim()
+    : typeof args.filePath === "string" && args.filePath.trim() ? args.filePath.trim()
+    : typeof args.file === "string" && args.file.trim() ? args.file.trim()
+    : typeof args.filename === "string" && args.filename.trim() ? args.filename.trim()
+    : typeof args.target === "string" && args.target.trim() ? args.target.trim() : null;
   if (alias) {
     args.file_path = alias;
     if (typeof args.path === "string") delete args.path;
     if (typeof args.filePath === "string") delete args.filePath;
+    if (typeof args.file === "string") delete args.file;
+    if (typeof args.filename === "string") delete args.filename;
+    if (typeof args.target === "string") delete args.target;
+    return;
   }
+  for (const [k, v] of Object.entries(args)) {
+    if (typeof v === "string" && v.trim() && (v.includes("/") || v.includes("\\") || v.includes("."))) {
+      args.file_path = v.trim();
+      return;
+    }
+  }
+  args.file_path = "";
 }
 
 function sanitizeReadArgs(args) {
