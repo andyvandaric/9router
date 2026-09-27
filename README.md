@@ -1,20 +1,20 @@
 > [!TIP]
-> ### 📦 Cara Install Cepat untuk Buyer ACS (Zero-Friction Install)
-> Buyer Anda tidak perlu menunggu publish npm public. Cukup jalankan **satu baris perintah** berikut di terminal:
+> ### 📦 Panduan Instalasi Cepat untuk Pengguna [ACS (Agnostic Config Suites)](https://uikode.com/acs/)
+> Untuk mendapatkan seluruh stabilitas patch produksi ini tanpa menunggu antrean rilis npm resmi, jalankan perintah instalasi berikut di terminal Anda:
 >
 > ```bash
-> # Opsi 1: Install Global langsung dari GitHub Fork (Rekomendasi Utama)
+> # Opsi 1: Instalasi Global langsung dari Repositori GitHub Resmi Fork (Direkomendasikan)
 > npm install -g https://github.com/andyvandaric/9router.git
 >
-> # Opsi 2: Menggunakan npx (Jalankan langsung tanpa install permanen)
+> # Opsi 2: Jalankan Instan via npx (Tanpa instalasi permanen)
 > npx https://github.com/andyvandaric/9router.git
 >
-> # Opsi 3: Clone & Link Lokal (Untuk development / custom patch)
+> # Opsi 3: Clone & Build Lokal (Khusus kontributor / pengembang)
 > git clone https://github.com/andyvandaric/9router.git
 > cd 9router
 > npm install && npm link
 > ```
-> *Setelah terinstall, cukup ketik `9router` di terminal. Dashboard langsung aktif di `http://localhost:20128` dengan seluruh patch OpenCode, Claude Code CLI, & Antigravity terpasang otomatis.*
+> *Setelah instalasi selesai, cukup jalankan `acs service start 9router` atau kelola otomatis langsung melalui dashboard [ACS](https://uikode.com/acs/). Service aktif di `http://localhost:20128` dengan konfigurasi hardening OpenCode, Claude Code CLI, dan Antigravity yang langsung aktif secara bawaan.*
 
 ---
 
