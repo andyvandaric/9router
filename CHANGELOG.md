@@ -1,3 +1,12 @@
+# v0.5.91-andyvandaric-patch (2026-09-27)
+
+## Fork-Exclusive Critical Patches & Hardening
+- **OpenCode Zen Console Clamp**: auto-clamp `max_output_tokens >= 16` in `opencode`, `opencode-zen`, and `opencode-go` executors to permanently prevent upstream OpenCode Zen Console HTTP 400 `invalid_request_error`.
+- **Tool Call Collision Prevention**: remap and isolate tool call block indices in `openai-to-claude` and `kiro-to-claude` response streaming translators so multiple tool calls or repeated delta chunks never concatenate into invalid JSON `{...}{...}`.
+- **Claude Code Tool Parameter Sanitization**: automatically map parameter aliases `path`/`filePath` to `file_path` for `Read`, `Edit`, `Write` tools and normalize `command` for `Bash` to eliminate Zod schema validation errors.
+- **Antigravity & Gemini Stability**: merged adjacent same-role turns, strip empty text/parts, ensure array items schema validation, and synchronized Gemini 3.8/3.5 Flash quota endpoints and thought signatures.
+- **Windows Build Hardening**: added safe directory locking release in build scripts to prevent file access locks during package builds.
+
 # v0.5.91 (2026-09-26)
 
 ## Features

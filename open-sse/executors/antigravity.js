@@ -192,22 +192,18 @@ export class AntigravityExecutor extends BaseExecutor {
     const sessionId = toNumericSessionId(rawSessionId) || rawSessionId;
 
     // ─── Standard (non-image) request ───
-    // Fix contents for Claude models via Antigravity
+    // Fix contents for Claude models and Gemini 3+ via Antigravity
     const rawContents = (body.request?.contents || []).map(c => {
       let role = c.role;
-      // functionResponse must be role "user" for Claude models
       if (c.parts?.some(p => p.functionResponse)) {
         role = "user";
       }
-      // Strip thought-only parts, keep thoughtSignature on functionCall parts (Gemini 3+ requires it)
       const parts = c.parts?.filter(p => {
         if (p.thought && !p.functionCall) return false;
-        if (p.thoughtSignature && !p.functionCall && !p.text) return false;
+        if (p.thoughtSignature && !p.functionCall && (!p.text || p.text === "")) return false;
+        if (p.text === "") return false;
         return true;
       });
-      // Gemini 3+ rejects functionCall parts without thoughtSignature. Clients (Claude Code, IDE)
-      // don't persist thoughtSignature in their history, so backfill from cache or default signature.
-      // In parallel function calls, only the first call needs a signature; siblings stay unsigned.
       let firstFunctionCallSeen = false;
       const modifiedParts = parts?.map(p => {
         if (!p.functionCall) return p;
@@ -219,7 +215,6 @@ export class AntigravityExecutor extends BaseExecutor {
           return { ...p, thoughtSignature: callSig };
         }
         if (p.thoughtSignature && !cachedSig) {
-          // Unsigned sibling call
           const { thoughtSignature: _, ...rest } = p;
           return rest;
         }
@@ -231,8 +226,23 @@ export class AntigravityExecutor extends BaseExecutor {
         role,
         parts: modifiedParts || parts || [],
       };
-    });
-    const contents = normalizeGeminiContents(rawContents);
+    }).filter(turn => turn.parts && turn.parts.length > 0);
+
+    const mergedContents = [];
+    for (const turn of rawContents) {
+      const last = mergedContents.at(-1);
+      if (last && last.role === turn.role) {
+        last.parts.push(...turn.parts);
+      } else {
+        mergedContents.push({ ...turn, parts: [...turn.parts] });
+      }
+    }
+
+    if (mergedContents.length === 0) {
+      mergedContents.push({ role: "user", parts: [{ text: "..." }] });
+    }
+
+    const contents = normalizeGeminiContents ? normalizeGeminiContents(mergedContents) : mergedContents;
 
     // Sanitize tool schemas and function names before sending to Antigravity.
     let tools = body.request?.tools;

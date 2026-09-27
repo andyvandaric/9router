@@ -9,10 +9,8 @@
 !.yarn/plugins
 !.yarn/releases
 !.yarn/versions
-
 # testing
 /coverage
-
 # next.js
 /.next/
 /.next-cli-build/
@@ -22,28 +20,22 @@ product
 # production
 /build
 .idea/
-
 # misc
 .DS_Store
 *.pem
-
 # debug
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
-
 # env files (can opt-in for committing if needed)
 .env*
 !.env.example
-
 # vercel
 .vercel
-
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-
 .bin/*
 data/
 logs/*
@@ -61,23 +53,18 @@ Thanks.md
 PUBLIC.en.md
 PR/*
 package-lock.json
-
-
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md
 README1.md
 deploy*.sh
 ecosystem.config.*
-
 scripts/agSniffer/*
 gitbooks/*
 gitbook/README.md
-
 # Refactor backup reference (do not bundle/lint)
 open-sse.old/
 .graphifyignore
 graphify-out/*
-
 # Local-only working dirs (notes, vendored repos, scripts, skills)
 .claude/
 .docs/
@@ -86,11 +73,20 @@ graphify-out/*
 .codegraph/
 .PR/
 .next-analyze/*
-
+# Tooling and agent runtime cache
+.omc/
+**/.omc/
+.docsgen/
+__pycache__/
+*.pyc
+*.orig
+vitest-out.json
+# Deployed by ACS patch system
+open-sse/executors/kiroAnthropicSse.js
+open-sse/rtk/cacheBreakpoints.js
 # Kiro local workspace state
 .kiro/
 9router-*
-
 # Local sensitive / temp files
 .engine-token.txt
 .tmp-prov.json
