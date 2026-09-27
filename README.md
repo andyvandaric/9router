@@ -12,9 +12,8 @@
 > npx https://github.com/andyvandaric/9router/releases/download/v0.5.91-andyvandaric-patch/9router-0.5.91.tgz
 > ```
 > **Pengguna Dashboard ACS**
-> # Setelah terpasang, Cukup klik Start pada Service 9router di dashboard ACS (otomatis termanage).
 > 
-> *Setelah instalasi selesai, cukup jalankan `acs service start 9router` atau jalankan `9router`. Service aktif di `http://localhost:20128` dengan konfigurasi hardening OpenCode, Claude Code CLI, dan Antigravity yang langsung aktif secara bawaan.*
+> *Setelah instalasi selesai, cukup jalankan `acs service start 9router` atau Cukup klik Start pada Service 9router di dashboard ACS (otomatis termanage).
 
 ---
 
