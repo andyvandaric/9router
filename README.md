@@ -8,6 +8,7 @@
 > npm install -g https://github.com/andyvandaric/9router/releases/download/v0.5.91-andyvandaric-patch/9router-0.5.91.tgz
 > ```
 > **Opsi 2: Jalankan Langsung via npx**
+> ```bash
 > npx https://github.com/andyvandaric/9router/releases/download/v0.5.91-andyvandaric-patch/9router-0.5.91.tgz
 > ```
 > **Pengguna Dashboard ACS**
