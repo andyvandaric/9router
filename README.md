@@ -1,3 +1,23 @@
+> [!TIP]
+> ### 📦 Cara Install Cepat untuk Buyer ACS (Zero-Friction Install)
+> Buyer Anda tidak perlu menunggu publish npm public. Cukup jalankan **satu baris perintah** berikut di terminal:
+>
+> ```bash
+> # Opsi 1: Install Global langsung dari GitHub Fork (Rekomendasi Utama)
+> npm install -g https://github.com/andyvandaric/9router.git
+>
+> # Opsi 2: Menggunakan npx (Jalankan langsung tanpa install permanen)
+> npx https://github.com/andyvandaric/9router.git
+>
+> # Opsi 3: Clone & Link Lokal (Untuk development / custom patch)
+> git clone https://github.com/andyvandaric/9router.git
+> cd 9router
+> npm install && npm link
+> ```
+> *Setelah terinstall, cukup ketik `9router` di terminal. Dashboard langsung aktif di `http://localhost:20128` dengan seluruh patch OpenCode, Claude Code CLI, & Antigravity terpasang otomatis.*
+
+---
+
 > [!IMPORTANT]
 > ### 🇮🇩 AndyVandaric Custom Patches & Production Hardening (Fork-Exclusive)
 > Repositori fork ini menyertakan perbaikan kritis (*critical upstream fixes*) yang **belum ada di upstream resmi `decolua/9router`**, dirancang khusus untuk memastikan stabilitas 100% ketika dipasangkan dengan **Claude Code CLI**, **OpenCode Free Models**, dan **Antigravity**:
