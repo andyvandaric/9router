@@ -1,3 +1,56 @@
+> [!TIP]
+> ### 📦 Panduan Instalasi Cepat untuk Pengguna [ACS (Agnostic Config Suites)](https://uikode.com/acs/)
+> Untuk mendapatkan seluruh stabilitas patch produksi ini secara instan, bersih, dan tanpa perlu compile Next.js lokal, gunakan release tarball prebuilt resmi di bawah ini:
+>
+> 
+> **Opsi 1: Instalasi Global Paket Prebuilt (Direkomendasikan — Bersih, Cepat, Zero-Build)**
+> ```bash
+> npm install -g https://github.com/andyvandaric/9router/releases/download/v0.5.91-andyvandaric-patch/9router-0.5.91.tgz
+> ```
+> **Opsi 2: Jalankan Langsung via npx**
+> ```bash
+> npx https://github.com/andyvandaric/9router/releases/download/v0.5.91-andyvandaric-patch/9router-0.5.91.tgz
+> ```
+> **Pengguna Dashboard ACS**
+> 
+> *Setelah instalasi selesai, cukup jalankan `acs service start 9router` atau Cukup klik Start pada Service 9router di dashboard ACS (otomatis termanage).
+
+---
+
+> [!IMPORTANT]
+> ### 🇮🇩 AndyVandaric Custom Patches & Production Hardening (Fork-Exclusive)
+> Repositori fork ini menyertakan perbaikan kritis (*critical upstream fixes*) yang **belum ada di upstream resmi `decolua/9router`**, dirancang khusus untuk memastikan stabilitas 100% ketika dipasangkan dengan **Claude Code CLI**, **OpenCode Free Models**, dan **Antigravity**:
+>
+> 1. **OpenCode Zen Console `max_output_tokens >= 16` Enforcement**:
+>    - *Problem*: Upstream OpenCode Console (`/zen/v1/responses`) menolak request dengan `max_output_tokens < 16` menghasilkan error `400 invalid_request_error`.
+>    - *Solution*: Auto-clamp `Math.max(body.max_output_tokens, 16)` di executor `opencode.js`, `opencode-zen.js`, dan `opencode-go.js` sehingga probe/request dengan 1 token tetap berhasil.
+> 2. **Pencegahan Tool Call Collision & Concatenated JSON (`{...}{...}`)**:
+>    - *Problem*: Pada streaming SSE model non-Anthropic (OpenCode free / Gemini bridges), pemancar tool call sering me-reuse index yang sama sehingga delta argumen tergabung menjadi satu JSON cacat `{"command":"..."}{"command":"..."}` dan menyebabkan `InputValidationError: Bash was called with input that could not be parsed as JSON`.
+>    - *Solution*: Mengisolasi index block tool-use (`nextFreeToolIdx` dan mapping remap) di `openai-to-claude.js` dan `kiro-to-claude.js`.
+> 3. **Normalisasi Parameter Tool Claude Code (`Read`, `Edit`, `Write`, `Bash`)**:
+>    - *Problem*: Model LLM non-Anthropic sering mengirimkan parameter alias (`path`/`filePath` alih-alih `file_path` pada `Read`, atau `cmd`/`input` alih-alih `command` pada `Bash`), memicu error Zod `The parameter file_path / command type is expected as string but provided as unknown`.
+>    - *Solution*: Interceptor auto-aliasing di translator response yang memetakan parameter secara transparan sebelum diteruskan ke Claude Code.
+> 4. **Antigravity & Gemini Stability**:
+>    - *Problem*: Request ke Gemini via Antigravity sering 400 karena empty turn, parts tanpa text, missing array items schema, atau thought signature tidak cocok.
+>    - *Solution*: Pembersihan empty parts, merge turn bersebelahan, validasi recursive array items schema, dan sinkronisasi signature Gemini 3.8/3.5 Flash.
+> 5. **Windows Build & Process Locking Protection**:
+>    - *Problem*: Build gagal saat file/direktori terkunci oleh proses aktif di Windows OS.
+>    - *Solution*: Safe retry and directory release handling di scripts build CLI.
+
+---
+
+> [!NOTE]
+> ### 🇮🇩 Misi Fork: Fast-Track Critical Patches & Continuous Stability
+> Repositori ini adalah fork aktif dari [decolua/9router](https://github.com/decolua/9router) yang didedikasikan untuk menerapkan **fast-update patches** mendesak selagi menunggu rilis resmi dari upstream.
+>
+> - ⚡ **Fast-Track Hotfixes**: Mengintegrasikan patch krusial secara cepat (seperti pembaruan client fingerprint Antigravity, koreksi upstream wire model Gemini 3.8 & 3.5 Flash, penyesuaian kuota, dan OAuth fixes).
+> - 🛡️ **Reliabilitas Tanpa Henti**: Memastikan koneksi routing ke seluruh AI developer tools (Claude Code, Cursor, Codex, Copilot, dll.) tetap lancar tanpa downtime.
+> - 🔄 **Selaras dengan Upstream**: Tetap tersinkronisasi berkala dengan branch `master` upstream dan mengutamakan perubahan yang minimal, bersih, serta teruji.
+>
+> *This fork delivers immediate hotfixes and essential patches so your AI routing workflow remains completely uninterrupted while official upstream updates are pending.*
+
+---
+
 <div align="center">
   <img src="./images/9router.png?1" alt="9Router Dashboard" width="800"/>
   
