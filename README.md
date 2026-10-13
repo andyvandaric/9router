@@ -5,11 +5,11 @@
 > 
 > **Opsi 1: Instalasi Global Paket Prebuilt (Direkomendasikan — Bersih, Cepat, Zero-Build)**
 > ```bash
-> npm install -g https://github.com/andyvandaric/9router/releases/download/v0.5.91-andyvandaric-patch/9router-0.5.91.tgz
+> npm install -g https://github.com/andyvandaric/9router/releases/latest/download/9router-latest.tgz
 > ```
 > **Opsi 2: Jalankan Langsung via npx**
 > ```bash
-> npx https://github.com/andyvandaric/9router/releases/download/v0.5.91-andyvandaric-patch/9router-0.5.91.tgz
+> npx https://github.com/andyvandaric/9router/releases/latest/download/9router-latest.tgz
 > ```
 > **Pengguna Dashboard ACS**
 > 
