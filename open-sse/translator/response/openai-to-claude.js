@@ -10,14 +10,58 @@ import { extractReasoningText } from "../concerns/reasoning.js";
 // is then a no-op. Kept intentionally; do NOT couple to request's empty prefix.
 const CLAUDE_OAUTH_TOOL_PREFIX = "proxy_";
 
+// Normalize common parameter alias hallucinations from non-Anthropic models
+// when calling Claude Code / Claude Desktop built-in tools (Bash, Read, Edit, Write, Glob, Grep).
+export function normalizeClaudeToolInput(toolName, args) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return args;
+  const rawName = String(toolName || "");
+  const name = rawName.startsWith(CLAUDE_OAUTH_TOOL_PREFIX)
+    ? rawName.slice(CLAUDE_OAUTH_TOOL_PREFIX.length)
+    : rawName;
+  const lower = name.toLowerCase();
+
+  if (lower === "bash" || lower === "execute_command") {
+    if (args.command === undefined) {
+      const alt = args.cmd ?? args.script ?? args.command_line ?? args.commandLine ?? args.input ?? args.code;
+      if (typeof alt === "string") args.command = alt;
+    }
+    for (const k of ["cmd", "script", "command_line", "commandLine"]) {
+      if (args.command !== undefined && k in args) delete args[k];
+    }
+  } else if (lower === "read" || lower === "edit" || lower === "write" || lower === "multiedit") {
+    if (args.file_path === undefined) {
+      const alt = args.path ?? args.file ?? args.filepath ?? args.filePath ?? args.filename;
+      if (typeof alt === "string") args.file_path = alt;
+    }
+    if (lower === "edit" || lower === "multiedit") {
+      if (args.old_string === undefined && typeof (args.old_str ?? args.old_text ?? args.search) === "string") {
+        args.old_string = args.old_str ?? args.old_text ?? args.search;
+      }
+      if (args.new_string === undefined && typeof (args.new_str ?? args.new_text ?? args.replace) === "string") {
+        args.new_string = args.new_str ?? args.new_text ?? args.replace;
+      }
+    }
+    if (lower === "write" && args.content === undefined && typeof (args.text ?? args.data ?? args.body) === "string") {
+      args.content = args.text ?? args.data ?? args.body;
+    }
+    if (name === "Read" || lower === "read") sanitizeReadArgs(args);
+  } else if (lower === "glob" || lower === "grep") {
+    if (args.pattern === undefined) {
+      const alt = args.query ?? args.search ?? args.regex ?? args.glob;
+      if (typeof alt === "string") args.pattern = alt;
+    }
+    if (args.path === undefined && typeof (args.dir ?? args.directory ?? args.folder ?? args.file_path) === "string") {
+      args.path = args.dir ?? args.directory ?? args.folder ?? args.file_path;
+    }
+  }
+  return args;
+}
+
 // Sanitize tool call arguments to fix bad params from non-Anthropic models
 function sanitizeToolArgs(toolName, argsJson) {
   try {
     const args = JSON.parse(argsJson);
-    const name = toolName.startsWith(CLAUDE_OAUTH_TOOL_PREFIX)
-      ? toolName.slice(CLAUDE_OAUTH_TOOL_PREFIX.length)
-      : toolName;
-    if (name === "Read") sanitizeReadArgs(args);
+    normalizeClaudeToolInput(toolName, args);
     return JSON.stringify(args);
   } catch {
     return argsJson;

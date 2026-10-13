@@ -15,7 +15,7 @@ import {
   coerceResponsesOutput,
 } from "../translator/formats/responsesApi.js";
 
-const OPENCODE_UA = "opencode/1.18.31";
+const OPENCODE_UA = "opencode/1.19.0";
 const MAX_SESSION_LENGTH = 256;
 const MAX_TOOL_NAME_LEN = 128;
 const SESSION_HEADER = "x-opencode-session";
@@ -79,20 +79,43 @@ export function generateRequestId(timestamp = Date.now()) {
   return `msg_${time}${unstableRandom()}`;
 }
 
-export function translateSessionId(sessionId, clientTool = "") {
+export function translateSessionId(sessionId, clientTool = "", timestamp = Date.now()) {
   if (typeof sessionId === "string" && OPENCODE_SESSION_RE.test(sessionId.trim())) {
     return sessionId.trim();
   }
+  const cacheKey = `opencode:tr:${clientTool || "generic"}:${sessionId || ""}`;
+  const existing = stableOpencodeSessions.get(cacheKey);
+  if (existing) {
+    existing.lastUsed = Date.now();
+    stableOpencodeSessions.delete(cacheKey);
+    stableOpencodeSessions.set(cacheKey, existing);
+    return existing.sessionId;
+  }
+  if (timestamp !== lastTimestamp) {
+    lastTimestamp = timestamp;
+    counter = 0;
+  }
+  counter++;
+  const value = ~(BigInt(timestamp) * 0x1000n + BigInt(counter));
+  const timeHex = Array.from({ length: 6 }, (_, index) =>
+    Number((value >> BigInt(40 - 8 * index)) & 0xffn)
+      .toString(16)
+      .padStart(2, "0")
+  ).join("");
   const digest = crypto
     .createHash("sha256")
     .update(`opencode\0${clientTool || "generic"}\0${sessionId || ""}`)
     .digest();
-  const timeHex = digest.subarray(0, 6).toString("hex");
   let randomPart = "";
   for (let i = 6; i < 20; i++) {
     randomPart += BASE62_CHARS[digest[i] % 62];
   }
-  return `ses_${timeHex}${randomPart}`;
+  const id = `ses_${timeHex}${randomPart}`;
+  if (stableOpencodeSessions.size >= MAX_STABLE_SESSIONS) {
+    stableOpencodeSessions.delete(stableOpencodeSessions.keys().next().value);
+  }
+  stableOpencodeSessions.set(cacheKey, { sessionId: id, lastUsed: Date.now() });
+  return id;
 }
 
 function normalizeSession(value) {
@@ -192,20 +215,25 @@ function lastUserText(body) {
 // The real CLI sends the current user message id (stable per turn, same on
 // retries) as x-opencode-request. Derive it deterministically from the
 // session plus the last user message so retries share the id.
-export function deriveRequestId(sessionId, body) {
+export function deriveRequestId(sessionId, body, timestamp = Date.now()) {
   const text = lastUserText(body);
-  if (!text) return generateRequestId();
+  if (!text) return generateRequestId(timestamp);
   const digest = crypto
     .createHash("sha256")
     .update(`opencode-req\0${sessionId || ""}\0${text}`)
     .digest();
-  const timeHex = digest.subarray(0, 6).toString("hex");
+  const value = BigInt(timestamp) * 0x1000n + 1n;
+  const timeHex = Array.from({ length: 6 }, (_, index) =>
+    Number((value >> BigInt(40 - 8 * index)) & 0xffn)
+      .toString(16)
+      .padStart(2, "0")
+  ).join("");
   let randomPart = "";
   for (let i = 6; i < 20; i++) {
     randomPart += BASE62_CHARS[digest[i] % 62];
   }
   const id = `msg_${timeHex}${randomPart}`;
-  return OPENCODE_REQUEST_RE.test(id) ? id : generateRequestId();
+  return OPENCODE_REQUEST_RE.test(id) ? id : generateRequestId(timestamp);
 }
 
 function normalizeRequestId(value) {
@@ -323,7 +351,7 @@ function normalizeResponsesTools(body) {
     if (parameters.type === "object" && !parameters.properties) parameters = { ...parameters, properties: {} };
     for (const k of Object.keys(tool)) delete tool[k];
     tool.type = "function";
-    tool.name = name.slice(0, MAX_TOOL_NAME_LEN);
+    tool.name = name.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, MAX_TOOL_NAME_LEN);
     if (description) tool.description = description;
     tool.parameters = parameters;
     validNames.add(tool.name);
@@ -356,7 +384,7 @@ function sanitizeResponsesItems(body) {
     delete item.reasoning_encrypted_content;
     if (item.type === "function_call") {
       if (!item.name || typeof item.name !== "string" || item.name.trim() === "") return false;
-      item.name = item.name.trim().slice(0, MAX_TOOL_NAME_LEN);
+      item.name = item.name.trim().replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, MAX_TOOL_NAME_LEN);
       item.call_id = clampResponsesCallId(item.call_id);
       item.arguments = coerceResponsesArguments(item.arguments);
       return true;
@@ -368,6 +396,19 @@ function sanitizeResponsesItems(body) {
     }
     return true;
   });
+  // Pair function_call and function_call_output so compacted/interrupted turns do not 400 upstream
+  const callIds = new Set(body.input.filter((x) => x?.type === "function_call").map((x) => x.call_id));
+  body.input = body.input.filter((x) => x?.type !== "function_call_output" || callIds.has(x.call_id));
+  const outputIds = new Set(body.input.filter((x) => x?.type === "function_call_output").map((x) => x.call_id));
+  const paired = [];
+  for (const item of body.input) {
+    paired.push(item);
+    if (item?.type === "function_call" && !outputIds.has(item.call_id)) {
+      paired.push({ type: "function_call_output", call_id: item.call_id, output: "{}" });
+      outputIds.add(item.call_id);
+    }
+  }
+  body.input = paired;
 }
 
 function normalizeOpencodeReasoning(model, body) {
@@ -433,6 +474,9 @@ export class OpenCodeExecutor extends BaseExecutor {
       }
       delete body.max_tokens;
       delete body.max_completion_tokens;
+      if (typeof body.max_output_tokens === "number") {
+        body.max_output_tokens = Math.min(Math.max(body.max_output_tokens, 16), 65536);
+      }
       normalizeOpencodeReasoning(model, body);
       body.stream = true;
       body.store = false;

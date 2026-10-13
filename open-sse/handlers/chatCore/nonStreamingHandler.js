@@ -1,6 +1,7 @@
 import { FORMATS } from "../../translator/formats.js";
 import { needsTranslation } from "../../translator/index.js";
 import { fromOpenAIFinish } from "../../translator/concerns/finishReason.js";
+import { normalizeClaudeToolInput } from "../../translator/response/openai-to-claude.js";
 import { ollamaBodyToOpenAI } from "../../translator/response/ollama-to-openai.js";
 import { addBufferToUsage, filterUsageForFormat } from "../../utils/usageTracking.js";
 import { createErrorResult } from "../../utils/error.js";
@@ -43,7 +44,7 @@ function openAICompletionToClaudeMessage(responseBody) {
       type: "tool_use",
       id: toolCall.id || `toolu_${Date.now()}_${content.length}`,
       name: fn.name || toolCall.name || "",
-      input: parseToolArguments(fn.arguments || toolCall.arguments),
+      input: normalizeClaudeToolInput(fn.name || toolCall.name || "", parseToolArguments(fn.arguments || toolCall.arguments)),
     });
   }
   if (content.length === 0) content.push({ type: "text", text: "" });

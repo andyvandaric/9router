@@ -15,7 +15,7 @@ const MAX_SESSION_LENGTH = 256;
 
 const RESPONSES_BASE_URL = "https://opencode.ai/zen/v1/responses";
 const MAX_TOOL_NAME_LEN = 128;
-const OPENCODE_UA = "opencode/1.18.31";
+const OPENCODE_UA = "opencode/1.19.0";
 export const OPENCODE_SESSION_RE = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 const BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 // Free-tier fingerprint (mirrors opencode executor, PR #4132): upstream 403s
@@ -61,20 +61,41 @@ export function generateRequestId(timestamp = Date.now()) {
   return `msg_${time}${unstableRandom()}`;
 }
 
-export function translateSessionId(sessionId, clientTool = "") {
+const translatedZenSessions = new Map();
+const MAX_TRANSLATED_SESSIONS = 1000;
+
+export function translateSessionId(sessionId, clientTool = "", timestamp = Date.now()) {
   if (typeof sessionId === "string" && OPENCODE_SESSION_RE.test(sessionId.trim())) {
     return sessionId.trim();
   }
+  const cacheKey = `opencode-zen:tr:${clientTool || "generic"}:${sessionId || ""}`;
+  const existing = translatedZenSessions.get(cacheKey);
+  if (existing) {
+    existing.lastUsed = Date.now();
+    translatedZenSessions.delete(cacheKey);
+    translatedZenSessions.set(cacheKey, existing);
+    return existing.sessionId;
+  }
+  const value = ~(BigInt(timestamp) * 0x1000n + 1n);
+  const timeHex = Array.from({ length: 6 }, (_, index) =>
+    Number((value >> BigInt(40 - 8 * index)) & 0xffn)
+      .toString(16)
+      .padStart(2, "0")
+  ).join("");
   const digest = crypto
     .createHash("sha256")
     .update(`opencode\0${clientTool || "generic"}\0${sessionId || ""}`)
     .digest();
-  const timeHex = digest.subarray(0, 6).toString("hex");
   let randomPart = "";
   for (let i = 6; i < 20; i++) {
     randomPart += BASE62_CHARS[digest[i] % 62];
   }
-  return `ses_${timeHex}${randomPart}`;
+  const id = `ses_${timeHex}${randomPart}`;
+  if (translatedZenSessions.size >= MAX_TRANSLATED_SESSIONS) {
+    translatedZenSessions.delete(translatedZenSessions.keys().next().value);
+  }
+  translatedZenSessions.set(cacheKey, { sessionId: id, lastUsed: Date.now() });
+  return id;
 }
 
 function toolNameOf(tool) {
@@ -183,7 +204,7 @@ function normalizeResponsesTools(body) {
     if (parameters.type === "object" && !parameters.properties) parameters = { ...parameters, properties: {} };
     for (const k of Object.keys(tool)) delete tool[k];
     tool.type = "function";
-    tool.name = name.slice(0, MAX_TOOL_NAME_LEN);
+    tool.name = name.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, MAX_TOOL_NAME_LEN);
     if (description) tool.description = description;
     tool.parameters = parameters;
     validNames.add(tool.name);
@@ -212,7 +233,7 @@ function sanitizeResponsesItems(body) {
     delete item.reasoning_encrypted_content;
     if (item.type === "function_call") {
       if (!item.name || typeof item.name !== "string" || item.name.trim() === "") return false;
-      item.name = item.name.trim().slice(0, MAX_TOOL_NAME_LEN);
+      item.name = item.name.trim().replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, MAX_TOOL_NAME_LEN);
       item.call_id = clampResponsesCallId(item.call_id);
       item.arguments = coerceResponsesArguments(item.arguments);
       return true;
@@ -224,6 +245,18 @@ function sanitizeResponsesItems(body) {
     }
     return true;
   });
+  const callIds = new Set(body.input.filter((x) => x?.type === "function_call").map((x) => x.call_id));
+  body.input = body.input.filter((x) => x?.type !== "function_call_output" || callIds.has(x.call_id));
+  const outputIds = new Set(body.input.filter((x) => x?.type === "function_call_output").map((x) => x.call_id));
+  const paired = [];
+  for (const item of body.input) {
+    paired.push(item);
+    if (item?.type === "function_call" && !outputIds.has(item.call_id)) {
+      paired.push({ type: "function_call_output", call_id: item.call_id, output: "{}" });
+      outputIds.add(item.call_id);
+    }
+  }
+  body.input = paired;
 }
 
 export class OpenCodeZenExecutor extends DefaultExecutor {
@@ -298,6 +331,9 @@ export class OpenCodeZenExecutor extends DefaultExecutor {
     }
     delete out.max_tokens;
     delete out.max_completion_tokens;
+    if (typeof out.max_output_tokens === "number") {
+      out.max_output_tokens = Math.min(Math.max(out.max_output_tokens, 16), 65536);
+    }
     if (out.reasoning_effort !== undefined && out.reasoning === undefined) {
       out.reasoning = { effort: out.reasoning_effort, summary: "auto" };
     }
