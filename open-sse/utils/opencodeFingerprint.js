@@ -9,34 +9,38 @@
  */
 
 /** Canonical names required by the upstream free-tier gate. */
-export const OPENCODE_FINGERPRINT_TOOLS = ["bash", "glob", "grep", "read"];
+export const OPENCODE_FINGERPRINT_TOOLS = ["read", "shell"];
 
-export const OPENCODE_DEFAULT_UA = "opencode/1.19.0";
-export const OPENCODE_DEFAULT_CLIENT = "cli";
-export const OPENCODE_SESSION_HEADER = "x-opencode-session";
-export const OPENCODE_SESSION_ID_HEADER = "x-opencode-session-id";
-export const MAX_TOOLS_COUNT = 128;
-
-// Aliases matching PRD specifications
-export const DEFAULT_OPENCODE_UA = OPENCODE_DEFAULT_UA;
-export const DEFAULT_OPENCODE_CLIENT = OPENCODE_DEFAULT_CLIENT;
-export const OPENCODE_HEADERS = {
-  CLIENT: "x-opencode-client",
-  SESSION: OPENCODE_SESSION_HEADER,
-  SESSION_ID: OPENCODE_SESSION_ID_HEADER,
-  REQUEST: "x-opencode-request",
-  PROJECT: "x-opencode-project",
+export const OPENCODE_CANONICAL_TOOL_DEFINITIONS = {
+  read: {
+    description: "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. Prefer one larger read over many small slices, and use grep to find specific content in large files.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "File or directory to read" },
+      },
+      required: ["path"],
+    },
+  },
+  shell: {
+    description: "Execute a shell command and return its output. Commands run on Windows using pwsh. Quote file paths containing spaces or special characters. Prefer dedicated tools over shell commands when possible. When output is large, the full result is saved to a file and a truncated preview is returned. Rely on automatic truncation unless filtering the output is more useful. Commands accept an optional timeout, background commands have no timeout by default. Background commands return immediately, and you will be notified when they complete.",
+    parameters: {
+      type: "object",
+      properties: {
+        command: { type: "string", description: "Shell command string to execute" },
+      },
+      required: ["command"],
+    },
+  },
 };
-
-// Request body -> names renamed for that request. transformRequest() mutates the
-// same body object that chatCore passed into the executor, so a WeakMap keeps the
-// mapping request-local without putting transport metadata on the wire.
 const renamedToolNames = new WeakMap();
 
-/** Canonical lowercase name when `name` is a quartet member; "" otherwise. */
+/** Canonical lowercase name when `name` is a fingerprint member; "" otherwise. */
 export function fingerprintToolKey(name) {
   const lower = String(name ?? "").trim().toLowerCase();
-  return OPENCODE_FINGERPRINT_TOOLS.includes(lower) ? lower : "";
+  if (lower === "bash" || lower === "shell") return "shell";
+  if (lower === "read") return "read";
+  return "";
 }
 
 /** Read a tool name from either flat ({name}) or chat ({function:{name}}) shape. */
@@ -82,12 +86,26 @@ export function concealFingerprintToolNames(tools) {
     if (seenQuartet.has(key)) continue;
     seenQuartet.add(key);
 
+    const def = OPENCODE_CANONICAL_TOOL_DEFINITIONS[key];
     if (current !== key) {
       map.set(key, current);
       const fn = tool.function && typeof tool.function === "object" && !Array.isArray(tool.function)
         ? tool.function
         : null;
-      out.push(fn ? { ...tool, function: { ...fn, name: key } } : { ...tool, name: key });
+      out.push(fn ? {
+        ...tool,
+        function: {
+          ...fn,
+          name: key,
+          description: def?.description || fn.description,
+          parameters: def?.parameters || fn.parameters,
+        },
+      } : {
+        ...tool,
+        name: key,
+        description: def?.description || tool.description,
+        parameters: def?.parameters || tool.parameters,
+      });
     } else {
       out.push(tool);
     }
@@ -95,22 +113,23 @@ export function concealFingerprintToolNames(tools) {
   return { tools: out, map };
 }
 
-/** Append only genuinely missing quartet declarations. */
+/** Append only genuinely missing fingerprint declarations. */
 export function appendMissingFingerprintTools(tools, flat) {
   const list = Array.isArray(tools) ? tools : [];
   for (const name of OPENCODE_FINGERPRINT_TOOLS) {
     if (list.some((tool) => fingerprintToolKey(toolNameOf(tool)) === name)) continue;
+    const def = OPENCODE_CANONICAL_TOOL_DEFINITIONS[name];
     list.push(flat ? {
       type: "function",
       name,
-      description: "This tool is currently unavailable and must not be used.",
-      parameters: { type: "object", properties: {} },
+      description: def.description,
+      parameters: def.parameters,
     } : {
       type: "function",
       function: {
         name,
-        description: "This tool is currently unavailable and must not be used.",
-        parameters: { type: "object", properties: {} },
+        description: def.description,
+        parameters: def.parameters,
       },
     });
   }
@@ -139,63 +158,9 @@ export function retargetToolChoice(body, map) {
 }
 
 /**
- * Sanitize and cap tools list.
- * - Filters valid tool objects.
- * - Normalizes tool names using `name.replace(/[^a-zA-Z0-9_-]/g, "_")`.
- * - Caps tool count to `maxCount` (default: MAX_TOOLS_COUNT = 128).
- *
- * @param {Array} tools
- * @param {number} [maxCount=MAX_TOOLS_COUNT]
- * @returns {Array}
- */
-export function sanitizeAndCapTools(tools, maxCount = MAX_TOOLS_COUNT) {
-  if (!Array.isArray(tools)) return [];
-
-  const sanitized = [];
-  for (const tool of tools) {
-    if (!tool || typeof tool !== "object" || Array.isArray(tool)) continue;
-
-    if (typeof tool.name === "string" && tool.name.trim()) {
-      const cleanName = tool.name.trim().replace(/[^a-zA-Z0-9_-]/g, "_");
-      sanitized.push({ ...tool, name: cleanName });
-      continue;
-    }
-
-    const fn = tool.function;
-    if (fn && typeof fn === "object" && !Array.isArray(fn) && typeof fn.name === "string" && fn.name.trim()) {
-      const cleanName = fn.name.trim().replace(/[^a-zA-Z0-9_-]/g, "_");
-      sanitized.push({ ...tool, function: { ...fn, name: cleanName } });
-      continue;
-    }
-
-    // Keep tool object even if without standard name structure
-    sanitized.push(tool);
-  }
-
-  return sanitized.slice(0, maxCount);
-}
-
-/**
- * Injects dual OpenCode session headers ensuring both headers carry identical sessionId.
- *
- * @param {object} headers
- * @param {string} sessionId
- * @returns {object} headers
- */
-export function injectOpenCodeDualSessionHeaders(headers, sessionId) {
-  if (!headers || typeof headers !== "object") return headers;
-  headers[OPENCODE_SESSION_HEADER] = sessionId;
-  headers[OPENCODE_SESSION_ID_HEADER] = sessionId;
-  return headers;
-}
-
-// Alias matching Phase 1 PRD spec
-export const applyOpenCodeSessionHeaders = injectOpenCodeDualSessionHeaders;
-
-/**
  * Full request-side pass: canonicalise quartet case variants, remove duplicate
- * quartet declarations, append missing members, sanitize & cap tools at max 128 items,
- * and preserve the legacy tool_choice defaults used by the OpenCode executor.
+ * quartet declarations, append missing members and preserve the legacy
+ * tool_choice defaults used by the OpenCode executor.
  *
  * @param {object} body
  * @param {boolean} flat - true for Responses tools ({name}), false for chat tools
@@ -206,25 +171,16 @@ export function applyFingerprintTools(body, flat) {
 
   const hadClientTools = Array.isArray(body.tools) && body.tools.length > 0;
   const { tools, map } = concealFingerprintToolNames(body.tools);
-
-  // If user provided tools, cap them to leave room for any missing quartet members (up to 4)
-  const maxUserTools = Math.max(0, MAX_TOOLS_COUNT - OPENCODE_FINGERPRINT_TOOLS.length);
-  const cappedUserTools = Array.isArray(tools) && tools.length > maxUserTools
-    ? tools.slice(0, maxUserTools)
-    : tools;
-
-  const withDecoys = appendMissingFingerprintTools(cappedUserTools, flat);
-  body.tools = sanitizeAndCapTools(withDecoys, MAX_TOOLS_COUNT);
+  body.tools = appendMissingFingerprintTools(tools, flat);
   retargetToolChoice(body, map);
 
   // Preserve the existing executor semantics. Responses uses auto when the
-  // fingerprint helper supplies tools; chat requests with no caller tools use
-  // none so the injected decoys cannot be selected.
-  if (!body.tool_choice) {
-    if (flat) body.tool_choice = "auto";
-    else if (!hadClientTools) body.tool_choice = "none";
+  // Free-tier responses API requires tool_choice to be auto when tools are declared.
+  // Upstream rejects tool_choice: "none" with FreeTierError (403), so omit tool_choice
+  // for chat completions when the client provided no tools.
+  if (!body.tool_choice && flat) {
+    body.tool_choice = "auto";
   }
-
   recordRenamedToolNames(body, map);
   return map;
 }

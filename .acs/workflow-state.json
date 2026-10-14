@@ -1,0 +1,161 @@
+{
+  "version": "1.33.0",
+  "mode": "lean",
+  "files": {
+    ".agents/rules/ast-refactoring-protocol.md": {
+      "sha": "b9288b10b397ed4a3e2f7dd44b277bbed75b359755ba3ec993f8fdfe9156ec66",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".agents/rules/backend-engineering-discipline.md": {
+      "sha": "b5ca42b69035f6de765c9d5326d2bda600740040505324c162b60690dbd0d472",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".agents/rules/copywriting-en.md": {
+      "sha": "5637dd7df717ebf75b920f7e0d49e01ca0cd00298adac8e8c5ffeb73461d26d4",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".agents/rules/copywriting-headline-en.md": {
+      "sha": "2c4ea2b16adfcd5414920df0681d1e82db2ac8956ef8055b01914834401738a2",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".agents/rules/copywriting-headline-id.md": {
+      "sha": "4531c32548440162d852fd2add664776a6e6ecdd4d419108d5e967f7e85ec130",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".agents/rules/copywriting-id.md": {
+      "sha": "a0e47b6012fa462ee0a8b3be32ca1623d92faca13e47dc57812548e72cfaf678",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".agents/rules/git-multi-tier-lifecycle-and-worktree-concurrency.md": {
+      "sha": "c8a2f8a3b998a445f1858b413291b7f13e08988cd0fcc5ff23cbd0cde0e33639",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".agents/rules/investigation-protocol.md": {
+      "sha": "de28d6b77eb45c84e31c18131cc32d9786930a3656421582506fccec274a9feb",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".agents/rules/kanban-governance.md": {
+      "sha": "fe58ee9993a7ea3daa24d46c159fb185677feda6a5981ab4d319cbe29282facd",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".agents/rules/mcp-governance.md": {
+      "sha": "e24042df1843d03cacf2ddb3c2da6144643ad471c1e0c7c16d4b54b668d1bdce",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".agents/rules/prd-blueprint-standard.md": {
+      "sha": "60c136a41ea54554a243ea2489ed9a8288e8f9af3a4ea202899fe3f48a0082f0",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".agents/rules/second-brain-governance.md": {
+      "sha": "c2a4a804d4e1c8b25050368ad8e382a1d3820c4ddd3c5cbfd728107a6662b235",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".agents/rules/ssot-config-governance.md": {
+      "sha": "897b87d7d4c22838a17c1f6a1a834f0111720b59cd779fa77363fc8c827e8b4a",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".agents/rules/ui-visual-engineering.md": {
+      "sha": "4e24e01546901379c7bb76509bf03fb1d1b76bb2070d8c2c67b3a275e45534b5",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".agents/templates/prd/index.template.md": {
+      "sha": "c2a90b3fb82fd9e56b4aed8362e1eb7945d21a2d6654d43bf219403d7fb28d8b",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".agents/templates/prd/phase.template.md": {
+      "sha": "25c54b54107fcb53852bcfb06eef31c3b86356546d26d38a20fa35f8a086448a",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".claude/agents/analyst.md": {
+      "sha": "d61db30524426a5812432262a57fc8aa04021def3ef60870cdad64b2304a9f90",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".claude/agents/architect.md": {
+      "sha": "64730f4c9d3a94c1786bf71d25ad40de0618b18a7bd7b74a2236301733ea3acb",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".claude/agents/code-reviewer.md": {
+      "sha": "44e607cfb2666218f3b0844c57a27bf713a8d62271db72c29ea4218e768b9c93",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".claude/agents/code-simplifier.md": {
+      "sha": "44a797ce76724e94821e6434cf9d578c6775ddd9eb233a3b4c071e2cb5f7f0cc",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".claude/agents/critic.md": {
+      "sha": "a6d716ab88db4a53377c1efa79942d9540aeca6e48a36dfa542b636681729779",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".claude/agents/debugger.md": {
+      "sha": "1eb6caa1ced9dbead61b4a971f8fbc050fb32b5c669ad1291c5723a2ae8afa5f",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".claude/agents/executor.md": {
+      "sha": "c4783e8528656d77ea555eb1f4fc14eae3d81ff3afc7af19a64f32b99f92415d",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".claude/agents/git-master.md": {
+      "sha": "bbee9d80d4b8d0dffa45b346b3ca791562ecde47fe7dfef0b4b50a9b80d131ca",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".claude/agents/planner.md": {
+      "sha": "20186e7bb9cc8298838cf2bd7caf187c79d9b9cb8ed941a9600b9c98454a09e5",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".claude/agents/qa-tester.md": {
+      "sha": "f34416b12bfc9c4071ee034c4e481733334b05e8e42d604cd84d579c557832ce",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".claude/agents/scientist.md": {
+      "sha": "cbe304e00b334c4c6035325542e522f66f8671b631dbc5fff4db9383bbefcd23",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".claude/agents/security-reviewer.md": {
+      "sha": "7f98da00152c861aeb02949e750c176da900eee0acf52aa5730d1f963e4e5d80",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".claude/agents/test-engineer.md": {
+      "sha": "1166fecfd90f68be3260686911c7ca0a5fde37b2db750179d70e1b2ead9e0ec1",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".claude/agents/verifier.md": {
+      "sha": "aaff548cc93e96f411137495935733dbd768bc894b306fb01d78478da690dc8e",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    },
+    ".claude/agents/writer.md": {
+      "sha": "ccbf8dc3957f1c633c95c5b99a0e74237ed1a393c562474cc3443c62abbc47c0",
+      "origin": "acs-managed",
+      "compatCheckedAt": "2026-10-14T16:14:43Z"
+    }
+  }
+}

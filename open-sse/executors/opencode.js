@@ -6,15 +6,7 @@ import { getThinkingLevels } from "../providers/thinkingLevels.js";
 import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
 import { isMuseSparkModel } from "../providers/models/helpers.js";
-import {
-  applyFingerprintTools,
-  injectOpenCodeDualSessionHeaders,
-  sanitizeAndCapTools,
-  OPENCODE_DEFAULT_UA,
-  OPENCODE_SESSION_HEADER,
-  OPENCODE_SESSION_ID_HEADER,
-  MAX_TOOLS_COUNT,
-} from "../utils/opencodeFingerprint.js";
+import { applyFingerprintTools } from "../utils/opencodeFingerprint.js";
 import { ANTHROPIC_API_VERSION } from "../providers/shared.js";
 import {
   normalizeResponsesInput,
@@ -23,7 +15,7 @@ import {
   coerceResponsesOutput,
 } from "../translator/formats/responsesApi.js";
 
-const OPENCODE_UA = "opencode/1.19.0";
+const OPENCODE_UA = "opencode/latest/2.0.29/cli";
 const MAX_SESSION_LENGTH = 256;
 const MAX_TOOL_NAME_LEN = 128;
 const SESSION_HEADER = "x-opencode-session";
@@ -33,14 +25,17 @@ export const OPENCODE_SESSION_RE = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 export const OPENCODE_REQUEST_RE = /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 const BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-function hasValidOpencodeVersion(ua) {
-  const m = String(ua || "").match(/opencode\/(\d+)\.(\d+)(?:\.(\d+))?/i);
+export function hasValidOpencodeVersion(ua) {
+  if (!ua || typeof ua !== "string") return false;
+  // Strictly match OpenCode version tag (e.g. "opencode/latest/2.0.29/cli" or "opencode/1.18.31").
+  // Avoid false-positive semver matches from general browser tokens like "Mozilla/5.0".
+  const m = ua.match(/\bopencode\/(?:(?:latest|stable|preview|dev|beta|[a-zA-Z0-9._-]+)\/)?(\d+)\.(\d+)(?:\.(\d+))?/i);
   if (!m) return false;
   const major = parseInt(m[1], 10);
   const minor = parseInt(m[2], 10);
-  return major > 1 || (major === 1 && minor >= 17);
+  return major >= 2 || (major === 1 && minor >= 17);
 }
-// Models served by /zen/v1/responses; every other model stays on /chat/completions.
+// Models served by /inference/v1/responses; every other model stays on /chat/completions.
 const RESPONSES_MODELS = new Set([
   "muse-spark-1.2-contributor-free",
   "muse-spark-1.3-contributor-free",
@@ -59,61 +54,67 @@ function unstableRandom() {
   return randomPart;
 }
 
-function formatHexTime(value) {
-  return Array.from({ length: 6 }, (_, index) =>
-    Number((value >> BigInt(40 - 8 * index)) & 0xffn)
-      .toString(16)
-      .padStart(2, "0")
-  ).join("");
-}
-
 export function generateSessionId(timestamp = Date.now()) {
   if (timestamp !== lastTimestamp) {
     lastTimestamp = timestamp;
     counter = 0;
   }
   counter++;
-  const value = ~(BigInt(timestamp) * 0x1000n + BigInt(counter));
-  return `ses_${formatHexTime(value)}${unstableRandom()}`;
+
+  const current = BigInt(timestamp) * 0x1000n + BigInt(counter);
+  const value = ~current;
+  const time = Array.from({ length: 6 }, (_, index) =>
+    Number((value >> BigInt(40 - 8 * index)) & 0xffn)
+      .toString(16)
+      .padStart(2, "0")
+  ).join("");
+  return `ses_${time}${unstableRandom()}`;
 }
 
 export function generateRequestId(timestamp = Date.now()) {
-  const value = BigInt(timestamp) * 0x1000n + 1n;
-  return `msg_${formatHexTime(value)}${unstableRandom()}`;
+  const current = BigInt(timestamp) * 0x1000n + 1n;
+  const value = current;
+  const time = Array.from({ length: 6 }, (_, index) =>
+    Number((value >> BigInt(40 - 8 * index)) & 0xffn)
+      .toString(16)
+      .padStart(2, "0")
+  ).join("");
+  return `msg_${time}${unstableRandom()}`;
 }
 
-export function translateSessionId(sessionId, clientTool = "", timestamp = Date.now()) {
+const translatedOpencodeSessions = new Map();
+const MAX_TRANSLATED_SESSIONS = 1000;
+const translatedSessionCleanup = setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of translatedOpencodeSessions) {
+    if (now - entry.lastUsed > (MEMORY_CONFIG?.sessionTtlMs || 1800000)) {
+      translatedOpencodeSessions.delete(key);
+    }
+  }
+}, MEMORY_CONFIG?.sessionCleanupIntervalMs || 300000);
+if (translatedSessionCleanup.unref) translatedSessionCleanup.unref();
+
+export function translateSessionId(sessionId, clientTool = "", connectionId = "") {
   if (typeof sessionId === "string" && OPENCODE_SESSION_RE.test(sessionId.trim())) {
     return sessionId.trim();
   }
-  const cacheKey = `opencode:tr:${clientTool || "generic"}:${sessionId || ""}`;
-  const existing = stableOpencodeSessions.get(cacheKey);
+  if (!sessionId || typeof sessionId !== "string" || !sessionId.trim()) {
+    return generateSessionId();
+  }
+  const normalized = sessionId.trim();
+  const key = `opencode:ses:${connectionId || "default"}:${clientTool || "generic"}:${normalized}`;
+  const existing = translatedOpencodeSessions.get(key);
   if (existing) {
     existing.lastUsed = Date.now();
-    stableOpencodeSessions.delete(cacheKey);
-    stableOpencodeSessions.set(cacheKey, existing);
+    translatedOpencodeSessions.delete(key);
+    translatedOpencodeSessions.set(key, existing);
     return existing.sessionId;
   }
-  if (timestamp !== lastTimestamp) {
-    lastTimestamp = timestamp;
-    counter = 0;
+  const id = generateSessionId();
+  if (translatedOpencodeSessions.size >= MAX_TRANSLATED_SESSIONS) {
+    translatedOpencodeSessions.delete(translatedOpencodeSessions.keys().next().value);
   }
-  counter++;
-  const value = ~(BigInt(timestamp) * 0x1000n + BigInt(counter));
-  const timeHex = formatHexTime(value);
-  const digest = crypto
-    .createHash("sha256")
-    .update(`opencode\0${clientTool || "generic"}\0${sessionId || ""}`)
-    .digest();
-  let randomPart = "";
-  for (let i = 6; i < 20; i++) {
-    randomPart += BASE62_CHARS[digest[i] % 62];
-  }
-  const id = `ses_${timeHex}${randomPart}`;
-  if (stableOpencodeSessions.size >= MAX_STABLE_SESSIONS) {
-    stableOpencodeSessions.delete(stableOpencodeSessions.keys().next().value);
-  }
-  stableOpencodeSessions.set(cacheKey, { sessionId: id, lastUsed: Date.now() });
+  translatedOpencodeSessions.set(key, { sessionId: id, lastUsed: Date.now() });
   return id;
 }
 
@@ -127,8 +128,7 @@ function normalizeSession(value) {
 function nativeSession(headers) {
   if (!headers || typeof headers !== "object") return null;
   for (const [key, value] of Object.entries(headers)) {
-    const lowerKey = key.toLowerCase();
-    if (lowerKey === SESSION_HEADER || lowerKey === OPENCODE_SESSION_ID_HEADER) {
+    if (key.toLowerCase() === SESSION_HEADER) {
       const normalized = normalizeSession(value);
       if (normalized && OPENCODE_SESSION_RE.test(normalized)) return normalized;
     }
@@ -215,21 +215,20 @@ function lastUserText(body) {
 // The real CLI sends the current user message id (stable per turn, same on
 // retries) as x-opencode-request. Derive it deterministically from the
 // session plus the last user message so retries share the id.
-export function deriveRequestId(sessionId, body, timestamp = Date.now()) {
+export function deriveRequestId(sessionId, body) {
   const text = lastUserText(body);
-  if (!text) return generateRequestId(timestamp);
+  if (!text) return generateRequestId();
   const digest = crypto
     .createHash("sha256")
     .update(`opencode-req\0${sessionId || ""}\0${text}`)
     .digest();
-  const value = BigInt(timestamp) * 0x1000n + 1n;
-  const timeHex = formatHexTime(value);
+  const timeHex = digest.subarray(0, 6).toString("hex");
   let randomPart = "";
   for (let i = 6; i < 20; i++) {
     randomPart += BASE62_CHARS[digest[i] % 62];
   }
   const id = `msg_${timeHex}${randomPart}`;
-  return OPENCODE_REQUEST_RE.test(id) ? id : generateRequestId(timestamp);
+  return OPENCODE_REQUEST_RE.test(id) ? id : generateRequestId();
 }
 
 function normalizeRequestId(value) {
@@ -247,7 +246,11 @@ function bodyHasSessionHints(body) {
     if (typeof body.prompt_cache_key === "string" && body.prompt_cache_key.trim()) return true;
     if (body.metadata && typeof body.metadata.user_id === "string" && body.metadata.user_id.trim()) return true;
     if (body.request && body.request.sessionId != null && String(body.request.sessionId) !== "") return true;
-    const arr = Array.isArray(body.messages) ? body.messages : (Array.isArray(body.input) ? body.input : null);
+    const arr = Array.isArray(body.messages)
+      ? body.messages
+      : Array.isArray(body.input)
+        ? body.input
+        : null;
     if (arr) {
       let assistantText = "";
       for (const msg of arr) {
@@ -288,10 +291,9 @@ function resolveOpencodeSession(body, credentials, providerSessionId, clientTool
 
   let incoming = null;
   for (const [key, value] of Object.entries(headers)) {
-    const lowerKey = key.toLowerCase();
-    if (lowerKey === SESSION_HEADER || lowerKey === OPENCODE_SESSION_ID_HEADER) {
+    if (key.toLowerCase() === SESSION_HEADER) {
       incoming = normalizeSession(value);
-      if (incoming) break;
+      break;
     }
   }
 
@@ -328,6 +330,36 @@ function resolveOpencodeRequestId(body, credentials, sessionId) {
   return deriveRequestId(sessionId, body);
 }
 
+function normalizeResponsesTools(body) {
+  if (!Array.isArray(body.tools)) return;
+  const validNames = new Set();
+  body.tools = body.tools.filter((tool) => {
+    if (!tool || typeof tool !== "object" || Array.isArray(tool)) return false;
+    const fn = tool.function && typeof tool.function === "object" && !Array.isArray(tool.function) ? tool.function : null;
+    const rawName = typeof tool.name === "string" ? tool.name : (typeof fn?.name === "string" ? fn.name : "");
+    const name = rawName.trim();
+    if (!name) return false;
+    const description = typeof tool.description === "string" ? tool.description : (typeof fn?.description === "string" ? fn.description : "");
+    let parameters = (tool.parameters && typeof tool.parameters === "object" && !Array.isArray(tool.parameters))
+      ? tool.parameters
+      : (fn?.parameters && typeof fn.parameters === "object" && !Array.isArray(fn.parameters) ? fn.parameters : { type: "object", properties: {} });
+    if (parameters.type === "object" && !parameters.properties) parameters = { ...parameters, properties: {} };
+    for (const k of Object.keys(tool)) delete tool[k];
+    tool.type = "function";
+    tool.name = name.slice(0, MAX_TOOL_NAME_LEN);
+    if (description) tool.description = description;
+    tool.parameters = parameters;
+    validNames.add(tool.name);
+    return true;
+  });
+  if (body.tool_choice && typeof body.tool_choice === "object" && !Array.isArray(body.tool_choice)) {
+    if (body.tool_choice.type === "function") {
+      const n = typeof body.tool_choice.name === "string" ? body.tool_choice.name.trim() : "";
+      if (!n || !validNames.has(n)) delete body.tool_choice;
+    }
+  }
+}
+
 function sanitizeResponsesItems(body) {
   if (!Array.isArray(body.input)) return;
   body.input = body.input.filter((item) => {
@@ -347,7 +379,7 @@ function sanitizeResponsesItems(body) {
     delete item.reasoning_encrypted_content;
     if (item.type === "function_call") {
       if (!item.name || typeof item.name !== "string" || item.name.trim() === "") return false;
-      item.name = item.name.trim().replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, MAX_TOOL_NAME_LEN);
+      item.name = item.name.trim().slice(0, MAX_TOOL_NAME_LEN);
       item.call_id = clampResponsesCallId(item.call_id);
       item.arguments = coerceResponsesArguments(item.arguments);
       return true;
@@ -359,19 +391,6 @@ function sanitizeResponsesItems(body) {
     }
     return true;
   });
-  // Pair function_call and function_call_output so compacted/interrupted turns do not 400 upstream
-  const callIds = new Set(body.input.filter((x) => x?.type === "function_call").map((x) => x.call_id));
-  body.input = body.input.filter((x) => x?.type !== "function_call_output" || callIds.has(x.call_id));
-  const outputIds = new Set(body.input.filter((x) => x?.type === "function_call_output").map((x) => x.call_id));
-  const paired = [];
-  for (const item of body.input) {
-    paired.push(item);
-    if (item?.type === "function_call" && !outputIds.has(item.call_id)) {
-      paired.push({ type: "function_call_output", call_id: item.call_id, output: "{}" });
-      outputIds.add(item.call_id);
-    }
-  }
-  body.input = paired;
 }
 
 function normalizeOpencodeReasoning(model, body) {
@@ -437,15 +456,10 @@ export class OpenCodeExecutor extends BaseExecutor {
       }
       delete body.max_tokens;
       delete body.max_completion_tokens;
-      if (typeof body.max_output_tokens === "number") {
-        body.max_output_tokens = Math.min(Math.max(body.max_output_tokens, 16), 65536);
-      }
       normalizeOpencodeReasoning(model, body);
       body.stream = true;
       body.store = false;
-      if (Array.isArray(body.tools)) {
-        body.tools = sanitizeAndCapTools(body.tools, MAX_TOOLS_COUNT);
-      }
+      normalizeResponsesTools(body);
       sanitizeResponsesItems(body);
       // Free-tier fingerprint tools are required even when an agent client
       // already supplied tools. ZCode/Claude Code requests normally have
@@ -463,12 +477,12 @@ export class OpenCodeExecutor extends BaseExecutor {
 
   buildUrl(model) {
     const base = this.config.baseUrl;
-    if (isResponsesModel(model)) return `${base}/zen/v1/responses`;
-    if (isMessagesModel(model)) return `${base}/zen/v1/messages`;
-    return `${base}/zen/v1/chat/completions`;
+    if (isResponsesModel(model)) return `${base}/inference/v1/responses`;
+    if (isMessagesModel(model)) return `${base}/inference/v1/messages`;
+    return `${base}/inference/v1/chat/completions`;
   }
 
-  buildHeaders(credentials, stream = true, url = "") {
+  buildHeaders(credentials, stream = true, url = "", model = "") {
     const raw = credentials?.rawHeaders || {};
     const lower = {};
     for (const [k, v] of Object.entries(raw)) lower[k.toLowerCase()] = v;
@@ -476,21 +490,35 @@ export class OpenCodeExecutor extends BaseExecutor {
     const downstreamUa = lower["user-agent"] || "";
     const isOpencodeDownstream = hasValidOpencodeVersion(downstreamUa);
 
-    const session = credentials?.[SESSION_FIELD] || this.prepareRequestCredentials({ credentials })[SESSION_FIELD];
-    const downstreamReq = normalizeRequestId(lower["x-opencode-request"]);
-    const requestId = credentials?.[REQ_FIELD] || downstreamReq || generateRequestId();
+    const session = credentials?.[SESSION_FIELD] || this.prepareRequestCredentials({ credentials })?.[SESSION_FIELD] || generateSessionId();
+    const auth = credentials?.apiKey ? `Bearer ${credentials.apiKey}` : "Bearer public";
 
     const headers = {
       "Content-Type": "application/json",
-      "Authorization": "Bearer public",
+      "Authorization": auth,
       "User-Agent": isOpencodeDownstream ? downstreamUa : OPENCODE_UA,
-      "x-opencode-client": lower["x-opencode-client"] || "cli",
-      "x-opencode-request": requestId,
+      "x-opencode-client": lower["x-opencode-client"] || "desktop",
+      "x-opencode-session": session,
+      "x-opencode-session-id": session,
+      "x-session-affinity": session,
+      "x-session-id": session,
       "x-opencode-project": lower["x-opencode-project"] || "global",
       "Accept": stream ? "text/event-stream" : "*/*",
     };
-    injectOpenCodeDualSessionHeaders(headers, session);
-    if (url.endsWith("/messages")) headers["anthropic-version"] = ANTHROPIC_API_VERSION;
+    const downstreamReq = normalizeRequestId(lower["x-opencode-request"]);
+    if (downstreamReq) {
+      headers["x-opencode-request"] = downstreamReq;
+    }
+    if ((url && url.endsWith("/messages")) || isMessagesModel(model)) {
+      headers["anthropic-version"] = ANTHROPIC_API_VERSION;
+    }
     return headers;
   }
+
+  execute(args) {
+    return super.execute({ ...args, credentials: this.prepareRequestCredentials(args) });
+  }
 }
+
+// Backward compatibility alias for tests
+export { translateSessionId as resolveOpencodeSessionId };

@@ -3,12 +3,6 @@ import { DefaultExecutor } from "./default.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
 import { isMuseSparkModel } from "../providers/models/helpers.js";
 import {
-  injectOpenCodeDualSessionHeaders,
-  sanitizeAndCapTools,
-  OPENCODE_SESSION_ID_HEADER,
-  MAX_TOOLS_COUNT,
-} from "../utils/opencodeFingerprint.js";
-import {
   normalizeResponsesInput,
   clampResponsesCallId,
   coerceResponsesArguments,
@@ -19,90 +13,22 @@ const SESSION_HEADER = "x-opencode-session";
 const SESSION_FIELD = "_opencodeZenSession";
 const MAX_SESSION_LENGTH = 256;
 
-const RESPONSES_BASE_URL = "https://opencode.ai/zen/v1/responses";
+const RESPONSES_BASE_URL = "https://opencode.ai/inference/v1/responses";
 const MAX_TOOL_NAME_LEN = 128;
-const OPENCODE_UA = "opencode/1.19.0";
+const OPENCODE_UA = "opencode/latest/2.0.29/cli";
 export const OPENCODE_SESSION_RE = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 const BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-// Free-tier fingerprint (mirrors opencode executor, PR #4132): upstream 403s
-// requests without the file-search quartet and without stream:true.
-const OPENCODE_FINGERPRINT_TOOLS = ["bash", "glob", "grep", "read"];
+import {
+  OPENCODE_FINGERPRINT_TOOLS,
+  OPENCODE_CANONICAL_TOOL_DEFINITIONS,
+} from "../utils/opencodeFingerprint.js";
 
-function hasValidOpencodeVersion(ua) {
-  const m = String(ua || "").match(/opencode\/(\d+)\.(\d+)(?:\.(\d+))?/i);
-  if (!m) return false;
-  const major = parseInt(m[1], 10);
-  const minor = parseInt(m[2], 10);
-  return major > 1 || (major === 1 && minor >= 17);
-}
-
-function unstableRandom() {
-  const bytes = crypto.randomBytes(14);
-  let randomPart = "";
-  for (let i = 0; i < 14; i++) {
-    randomPart += BASE62_CHARS[bytes[i] % 62];
-  }
-  return randomPart;
-}
-
-export function generateSessionId(timestamp = Date.now()) {
-  const current = BigInt(timestamp) * 0x1000n + 1n;
-  const value = ~current;
-  const time = Array.from({ length: 6 }, (_, index) =>
-    Number((value >> BigInt(40 - 8 * index)) & 0xffn)
-      .toString(16)
-      .padStart(2, "0")
-  ).join("");
-  return `ses_${time}${unstableRandom()}`;
-}
-
-export function generateRequestId(timestamp = Date.now()) {
-  const current = BigInt(timestamp) * 0x1000n + 1n;
-  const value = current;
-  const time = Array.from({ length: 6 }, (_, index) =>
-    Number((value >> BigInt(40 - 8 * index)) & 0xffn)
-      .toString(16)
-      .padStart(2, "0")
-  ).join("");
-  return `msg_${time}${unstableRandom()}`;
-}
-
-const translatedZenSessions = new Map();
-const MAX_TRANSLATED_SESSIONS = 1000;
-
-export function translateSessionId(sessionId, clientTool = "", timestamp = Date.now()) {
-  if (typeof sessionId === "string" && OPENCODE_SESSION_RE.test(sessionId.trim())) {
-    return sessionId.trim();
-  }
-  const cacheKey = `opencode-zen:tr:${clientTool || "generic"}:${sessionId || ""}`;
-  const existing = translatedZenSessions.get(cacheKey);
-  if (existing) {
-    existing.lastUsed = Date.now();
-    translatedZenSessions.delete(cacheKey);
-    translatedZenSessions.set(cacheKey, existing);
-    return existing.sessionId;
-  }
-  const value = ~(BigInt(timestamp) * 0x1000n + 1n);
-  const timeHex = Array.from({ length: 6 }, (_, index) =>
-    Number((value >> BigInt(40 - 8 * index)) & 0xffn)
-      .toString(16)
-      .padStart(2, "0")
-  ).join("");
-  const digest = crypto
-    .createHash("sha256")
-    .update(`opencode\0${clientTool || "generic"}\0${sessionId || ""}`)
-    .digest();
-  let randomPart = "";
-  for (let i = 6; i < 20; i++) {
-    randomPart += BASE62_CHARS[digest[i] % 62];
-  }
-  const id = `ses_${timeHex}${randomPart}`;
-  if (translatedZenSessions.size >= MAX_TRANSLATED_SESSIONS) {
-    translatedZenSessions.delete(translatedZenSessions.keys().next().value);
-  }
-  translatedZenSessions.set(cacheKey, { sessionId: id, lastUsed: Date.now() });
-  return id;
-}
+import {
+  generateSessionId,
+  generateRequestId,
+  translateSessionId,
+  hasValidOpencodeVersion,
+} from "./opencode.js";
 
 function toolNameOf(tool) {
   if (!tool || typeof tool !== "object" || Array.isArray(tool)) return "";
@@ -124,12 +50,13 @@ function ensureChatFingerprintTools(body) {
   }
   for (const name of OPENCODE_FINGERPRINT_TOOLS) {
     if (present.has(name)) continue;
+    const def = OPENCODE_CANONICAL_TOOL_DEFINITIONS[name];
     body.tools.push({
       type: "function",
       function: {
         name,
-        description: `OpenCode built-in ${name} tool`,
-        parameters: { type: "object", properties: {} },
+        description: def.description,
+        parameters: def.parameters,
       },
     });
     present.add(name);
@@ -149,11 +76,12 @@ function ensureResponsesFingerprintTools(body) {
   }
   for (const name of OPENCODE_FINGERPRINT_TOOLS) {
     if (present.has(name)) continue;
+    const def = OPENCODE_CANONICAL_TOOL_DEFINITIONS[name];
     body.tools.push({
       type: "function",
       name,
-      description: `OpenCode built-in ${name} tool`,
-      parameters: { type: "object", properties: {} },
+      description: def.description,
+      parameters: def.parameters,
     });
     present.add(name);
   }
@@ -169,8 +97,7 @@ function normalizeSession(value) {
 function nativeSession(headers) {
   if (!headers || typeof headers !== "object") return null;
   for (const [key, value] of Object.entries(headers)) {
-    const lowerKey = key.toLowerCase();
-    if (lowerKey === SESSION_HEADER || lowerKey === OPENCODE_SESSION_ID_HEADER) {
+    if (key.toLowerCase() === SESSION_HEADER) {
       const normalized = normalizeSession(value);
       if (normalized && OPENCODE_SESSION_RE.test(normalized)) return normalized;
     }
@@ -211,7 +138,7 @@ function normalizeResponsesTools(body) {
     if (parameters.type === "object" && !parameters.properties) parameters = { ...parameters, properties: {} };
     for (const k of Object.keys(tool)) delete tool[k];
     tool.type = "function";
-    tool.name = name.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, MAX_TOOL_NAME_LEN);
+    tool.name = name.slice(0, MAX_TOOL_NAME_LEN);
     if (description) tool.description = description;
     tool.parameters = parameters;
     validNames.add(tool.name);
@@ -240,7 +167,7 @@ function sanitizeResponsesItems(body) {
     delete item.reasoning_encrypted_content;
     if (item.type === "function_call") {
       if (!item.name || typeof item.name !== "string" || item.name.trim() === "") return false;
-      item.name = item.name.trim().replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, MAX_TOOL_NAME_LEN);
+      item.name = item.name.trim().slice(0, MAX_TOOL_NAME_LEN);
       item.call_id = clampResponsesCallId(item.call_id);
       item.arguments = coerceResponsesArguments(item.arguments);
       return true;
@@ -252,18 +179,6 @@ function sanitizeResponsesItems(body) {
     }
     return true;
   });
-  const callIds = new Set(body.input.filter((x) => x?.type === "function_call").map((x) => x.call_id));
-  body.input = body.input.filter((x) => x?.type !== "function_call_output" || callIds.has(x.call_id));
-  const outputIds = new Set(body.input.filter((x) => x?.type === "function_call_output").map((x) => x.call_id));
-  const paired = [];
-  for (const item of body.input) {
-    paired.push(item);
-    if (item?.type === "function_call" && !outputIds.has(item.call_id)) {
-      paired.push({ type: "function_call_output", call_id: item.call_id, output: "{}" });
-      outputIds.add(item.call_id);
-    }
-  }
-  body.input = paired;
 }
 
 export class OpenCodeZenExecutor extends DefaultExecutor {
@@ -304,16 +219,31 @@ export class OpenCodeZenExecutor extends DefaultExecutor {
     const lower = {};
     for (const [k, v] of Object.entries(raw)) lower[k.toLowerCase()] = v;
     const downstreamUa = lower["user-agent"] || "";
-    // Free-tier gate: spoof the official client UA.
+    headers["Authorization"] = credentials?.apiKey ? `Bearer ${credentials.apiKey}` : "Bearer public";
     headers["User-Agent"] = hasValidOpencodeVersion(downstreamUa) ? downstreamUa : OPENCODE_UA;
-    headers["x-opencode-client"] = lower["x-opencode-client"] || "cli";
-    const session = credentials?.[SESSION_FIELD] || this.prepareRequestCredentials({ credentials })[SESSION_FIELD];
-    injectOpenCodeDualSessionHeaders(headers, session);
+    headers["x-opencode-client"] = lower["x-opencode-client"] || "desktop";
+    headers["x-opencode-project"] = lower["x-opencode-project"] || "global";
+    const prepared = credentials?.[SESSION_FIELD];
+    if (prepared) {
+      headers[SESSION_HEADER] = prepared;
+      headers["x-opencode-session-id"] = prepared;
+      headers["x-session-affinity"] = prepared;
+      headers["x-session-id"] = prepared;
+      return headers;
+    }
+
+    const fallback = this.prepareRequestCredentials({ credentials });
+    const ses = fallback?.[SESSION_FIELD] || generateSessionId();
+    headers[SESSION_HEADER] = ses;
+    headers["x-opencode-session-id"] = ses;
+    headers["x-session-affinity"] = ses;
+    headers["x-session-id"] = ses;
     return headers;
   }
 
   transformRequest(model, body, stream, credentials) {
     const out = super.transformRequest(model, body);
+    if (out && typeof out === "object" && model && !out.model) out.model = model;
     // Free-tier gate: upstream 403s stream:false even when everything else is valid.
     if (out && typeof out === "object") out.stream = true;
     if (!isResponsesModel(model || body?.model)) {
@@ -332,9 +262,6 @@ export class OpenCodeZenExecutor extends DefaultExecutor {
     }
     delete out.max_tokens;
     delete out.max_completion_tokens;
-    if (typeof out.max_output_tokens === "number") {
-      out.max_output_tokens = Math.min(Math.max(out.max_output_tokens, 16), 65536);
-    }
     if (out.reasoning_effort !== undefined && out.reasoning === undefined) {
       out.reasoning = { effort: out.reasoning_effort, summary: "auto" };
     }
@@ -345,9 +272,6 @@ export class OpenCodeZenExecutor extends DefaultExecutor {
     out.stream = true;
     out.store = false;
     ensureResponsesFingerprintTools(out);
-    if (Array.isArray(out.tools)) {
-      out.tools = sanitizeAndCapTools(out.tools, MAX_TOOLS_COUNT);
-    }
     normalizeResponsesTools(out);
     sanitizeResponsesItems(out);
     return out;
