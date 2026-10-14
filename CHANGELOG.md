@@ -1,3 +1,12 @@
+# v0.5.99-andyvandaric-patch (2026-10-15, fork)
+
+## Fixes (fork: OpenCode free-tier restoration)
+- **OpenCode**: merge upstream PR #4840 — free-tier inference moved from deprecated `/zen/v1/*` to `/inference/v1/*`; UA `opencode/latest/2.0.29/cli`; canonical `read` + `shell` tool fingerprint with `bash`→`shell` aliasing
+- **OpenCode**: merge upstream PR #4842 — v2 client fingerprint; valid session-id counters; verbatim `read`/`shell` definitions with `*_client` aliasing; rejected `x-opencode-request` dropped; `tool_choice: "none"` never forced
+- **OpenCode**: dual session headers (`x-opencode-session` + `x-opencode-session-id`); 128-tool cap with `^[a-zA-Z0-9_-]+$` name sanitization
+- Live-verified via merged executor code: `oc/muse-spark-1.3-contributor-free` (Responses) and `oc/mimo-v2.6-flash-free` (chat) return HTTP 200
+- Known pre-existing (upstream, unrelated): `executor-const-guard` antigravity 429 test; `codex`/`kimi`/`minimax-code` baseline diffs
+
 # v0.5.99 (2026-10-08)
 
 ## Features
