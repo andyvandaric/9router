@@ -3,6 +3,12 @@ import { DefaultExecutor } from "./default.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
 import { isMuseSparkModel } from "../providers/models/helpers.js";
 import {
+  injectOpenCodeDualSessionHeaders,
+  sanitizeAndCapTools,
+  OPENCODE_SESSION_ID_HEADER,
+  MAX_TOOLS_COUNT,
+} from "../utils/opencodeFingerprint.js";
+import {
   normalizeResponsesInput,
   clampResponsesCallId,
   coerceResponsesArguments,
@@ -163,7 +169,8 @@ function normalizeSession(value) {
 function nativeSession(headers) {
   if (!headers || typeof headers !== "object") return null;
   for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === SESSION_HEADER) {
+    const lowerKey = key.toLowerCase();
+    if (lowerKey === SESSION_HEADER || lowerKey === OPENCODE_SESSION_ID_HEADER) {
       const normalized = normalizeSession(value);
       if (normalized && OPENCODE_SESSION_RE.test(normalized)) return normalized;
     }
@@ -299,15 +306,9 @@ export class OpenCodeZenExecutor extends DefaultExecutor {
     const downstreamUa = lower["user-agent"] || "";
     // Free-tier gate: spoof the official client UA.
     headers["User-Agent"] = hasValidOpencodeVersion(downstreamUa) ? downstreamUa : OPENCODE_UA;
-    headers["x-opencode-client"] = lower["x-opencode-client"] || "desktop";
-    const prepared = credentials?.[SESSION_FIELD];
-    if (prepared) {
-      headers[SESSION_HEADER] = prepared;
-      return headers;
-    }
-
-    const fallback = this.prepareRequestCredentials({ credentials });
-    headers[SESSION_HEADER] = fallback[SESSION_FIELD];
+    headers["x-opencode-client"] = lower["x-opencode-client"] || "cli";
+    const session = credentials?.[SESSION_FIELD] || this.prepareRequestCredentials({ credentials })[SESSION_FIELD];
+    injectOpenCodeDualSessionHeaders(headers, session);
     return headers;
   }
 
@@ -344,6 +345,9 @@ export class OpenCodeZenExecutor extends DefaultExecutor {
     out.stream = true;
     out.store = false;
     ensureResponsesFingerprintTools(out);
+    if (Array.isArray(out.tools)) {
+      out.tools = sanitizeAndCapTools(out.tools, MAX_TOOLS_COUNT);
+    }
     normalizeResponsesTools(out);
     sanitizeResponsesItems(out);
     return out;
