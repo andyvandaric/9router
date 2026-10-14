@@ -171,25 +171,25 @@ describe("OpenCode Free Executor Session Resolution", () => {
 });
 
 describe("OpenCode Free User-Agent Validation", () => {
-  it("defaults User-Agent to opencode/1.18.31 for non-opencode downstream clients", () => {
+  it("defaults User-Agent to opencode/1.19.0 for non-opencode downstream clients", () => {
     const executor = getExecutor("opencode");
     const headersNoUa = executor.buildHeaders({});
-    expect(headersNoUa["User-Agent"]).toBe("opencode/1.18.31");
+    expect(headersNoUa["User-Agent"]).toBe("opencode/1.19.0");
 
     const headersClaude = executor.buildHeaders({ rawHeaders: { "user-agent": "Claude-Code/1.0" } });
-    expect(headersClaude["User-Agent"]).toBe("opencode/1.18.31");
+    expect(headersClaude["User-Agent"]).toBe("opencode/1.19.0");
   });
 
-  it("replaces bare opencode with versioned opencode/1.18.31 to prevent 403 FreeTierError", () => {
+  it("replaces bare opencode with versioned opencode/1.19.0 to prevent 403 FreeTierError", () => {
     const executor = getExecutor("opencode");
     const headers = executor.buildHeaders({ rawHeaders: { "user-agent": "opencode" } });
-    expect(headers["User-Agent"]).toBe("opencode/1.18.31");
+    expect(headers["User-Agent"]).toBe("opencode/1.19.0");
   });
 
   it("upgrades outdated opencode versions (< 1.17) to prevent 426 Upgrade Required", () => {
     const executor = getExecutor("opencode");
     const headers = executor.buildHeaders({ rawHeaders: { "user-agent": "opencode/1.15.0" } });
-    expect(headers["User-Agent"]).toBe("opencode/1.18.31");
+    expect(headers["User-Agent"]).toBe("opencode/1.19.0");
   });
 
   it("preserves valid opencode versions (>= 1.17)", () => {
@@ -344,5 +344,25 @@ describe("OpenCode Stable Session Reuse (429 follow-up)", () => {
   it("declares forceStream on the opencode transport so chatCore serves SSE upstream", async () => {
     const { PROVIDERS } = await import("../../open-sse/config/providers.js");
     expect(PROVIDERS.opencode?.forceStream).toBe(true);
+  });
+
+  it("injects dual session headers (x-opencode-session and x-opencode-session-id) and default cli client", () => {
+    const executor = getExecutor("opencode");
+    const headers = executor.buildHeaders({});
+
+    expect(headers["x-opencode-client"]).toBe("cli");
+    expect(headers["x-opencode-session"]).toMatch(OPENCODE_SESSION_RE);
+    expect(headers["x-opencode-session-id"]).toBe(headers["x-opencode-session"]);
+  });
+
+  it("resolves session when incoming header has x-opencode-session-id fallback", () => {
+    const executor = getExecutor("opencode");
+    const valid = "ses_f534dfae8ffeCy4Ee4tLWNygDc";
+    const headers = executor.buildHeaders({
+      rawHeaders: { "x-opencode-session-id": valid },
+    });
+
+    expect(headers["x-opencode-session"]).toBe(valid);
+    expect(headers["x-opencode-session-id"]).toBe(valid);
   });
 });

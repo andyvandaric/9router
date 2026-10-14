@@ -6,7 +6,15 @@ import { getThinkingLevels } from "../providers/thinkingLevels.js";
 import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
 import { isMuseSparkModel } from "../providers/models/helpers.js";
-import { applyFingerprintTools } from "../utils/opencodeFingerprint.js";
+import {
+  applyFingerprintTools,
+  injectOpenCodeDualSessionHeaders,
+  sanitizeAndCapTools,
+  OPENCODE_DEFAULT_UA,
+  OPENCODE_SESSION_HEADER,
+  OPENCODE_SESSION_ID_HEADER,
+  MAX_TOOLS_COUNT,
+} from "../utils/opencodeFingerprint.js";
 import { ANTHROPIC_API_VERSION } from "../providers/shared.js";
 import {
   normalizeResponsesInput,
@@ -51,32 +59,27 @@ function unstableRandom() {
   return randomPart;
 }
 
+function formatHexTime(value) {
+  return Array.from({ length: 6 }, (_, index) =>
+    Number((value >> BigInt(40 - 8 * index)) & 0xffn)
+      .toString(16)
+      .padStart(2, "0")
+  ).join("");
+}
+
 export function generateSessionId(timestamp = Date.now()) {
   if (timestamp !== lastTimestamp) {
     lastTimestamp = timestamp;
     counter = 0;
   }
   counter++;
-
-  const current = BigInt(timestamp) * 0x1000n + BigInt(counter);
-  const value = ~current;
-  const time = Array.from({ length: 6 }, (_, index) =>
-    Number((value >> BigInt(40 - 8 * index)) & 0xffn)
-      .toString(16)
-      .padStart(2, "0")
-  ).join("");
-  return `ses_${time}${unstableRandom()}`;
+  const value = ~(BigInt(timestamp) * 0x1000n + BigInt(counter));
+  return `ses_${formatHexTime(value)}${unstableRandom()}`;
 }
 
 export function generateRequestId(timestamp = Date.now()) {
-  const current = BigInt(timestamp) * 0x1000n + 1n;
-  const value = current;
-  const time = Array.from({ length: 6 }, (_, index) =>
-    Number((value >> BigInt(40 - 8 * index)) & 0xffn)
-      .toString(16)
-      .padStart(2, "0")
-  ).join("");
-  return `msg_${time}${unstableRandom()}`;
+  const value = BigInt(timestamp) * 0x1000n + 1n;
+  return `msg_${formatHexTime(value)}${unstableRandom()}`;
 }
 
 export function translateSessionId(sessionId, clientTool = "", timestamp = Date.now()) {
@@ -97,11 +100,7 @@ export function translateSessionId(sessionId, clientTool = "", timestamp = Date.
   }
   counter++;
   const value = ~(BigInt(timestamp) * 0x1000n + BigInt(counter));
-  const timeHex = Array.from({ length: 6 }, (_, index) =>
-    Number((value >> BigInt(40 - 8 * index)) & 0xffn)
-      .toString(16)
-      .padStart(2, "0")
-  ).join("");
+  const timeHex = formatHexTime(value);
   const digest = crypto
     .createHash("sha256")
     .update(`opencode\0${clientTool || "generic"}\0${sessionId || ""}`)
@@ -128,7 +127,8 @@ function normalizeSession(value) {
 function nativeSession(headers) {
   if (!headers || typeof headers !== "object") return null;
   for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === SESSION_HEADER) {
+    const lowerKey = key.toLowerCase();
+    if (lowerKey === SESSION_HEADER || lowerKey === OPENCODE_SESSION_ID_HEADER) {
       const normalized = normalizeSession(value);
       if (normalized && OPENCODE_SESSION_RE.test(normalized)) return normalized;
     }
@@ -223,11 +223,7 @@ export function deriveRequestId(sessionId, body, timestamp = Date.now()) {
     .update(`opencode-req\0${sessionId || ""}\0${text}`)
     .digest();
   const value = BigInt(timestamp) * 0x1000n + 1n;
-  const timeHex = Array.from({ length: 6 }, (_, index) =>
-    Number((value >> BigInt(40 - 8 * index)) & 0xffn)
-      .toString(16)
-      .padStart(2, "0")
-  ).join("");
+  const timeHex = formatHexTime(value);
   let randomPart = "";
   for (let i = 6; i < 20; i++) {
     randomPart += BASE62_CHARS[digest[i] % 62];
@@ -251,11 +247,7 @@ function bodyHasSessionHints(body) {
     if (typeof body.prompt_cache_key === "string" && body.prompt_cache_key.trim()) return true;
     if (body.metadata && typeof body.metadata.user_id === "string" && body.metadata.user_id.trim()) return true;
     if (body.request && body.request.sessionId != null && String(body.request.sessionId) !== "") return true;
-    const arr = Array.isArray(body.messages)
-      ? body.messages
-      : Array.isArray(body.input)
-        ? body.input
-        : null;
+    const arr = Array.isArray(body.messages) ? body.messages : (Array.isArray(body.input) ? body.input : null);
     if (arr) {
       let assistantText = "";
       for (const msg of arr) {
@@ -296,9 +288,10 @@ function resolveOpencodeSession(body, credentials, providerSessionId, clientTool
 
   let incoming = null;
   for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === SESSION_HEADER) {
+    const lowerKey = key.toLowerCase();
+    if (lowerKey === SESSION_HEADER || lowerKey === OPENCODE_SESSION_ID_HEADER) {
       incoming = normalizeSession(value);
-      break;
+      if (incoming) break;
     }
   }
 
@@ -333,36 +326,6 @@ function resolveOpencodeRequestId(body, credentials, sessionId) {
     }
   }
   return deriveRequestId(sessionId, body);
-}
-
-function normalizeResponsesTools(body) {
-  if (!Array.isArray(body.tools)) return;
-  const validNames = new Set();
-  body.tools = body.tools.filter((tool) => {
-    if (!tool || typeof tool !== "object" || Array.isArray(tool)) return false;
-    const fn = tool.function && typeof tool.function === "object" && !Array.isArray(tool.function) ? tool.function : null;
-    const rawName = typeof tool.name === "string" ? tool.name : (typeof fn?.name === "string" ? fn.name : "");
-    const name = rawName.trim();
-    if (!name) return false;
-    const description = typeof tool.description === "string" ? tool.description : (typeof fn?.description === "string" ? fn.description : "");
-    let parameters = (tool.parameters && typeof tool.parameters === "object" && !Array.isArray(tool.parameters))
-      ? tool.parameters
-      : (fn?.parameters && typeof fn.parameters === "object" && !Array.isArray(fn.parameters) ? fn.parameters : { type: "object", properties: {} });
-    if (parameters.type === "object" && !parameters.properties) parameters = { ...parameters, properties: {} };
-    for (const k of Object.keys(tool)) delete tool[k];
-    tool.type = "function";
-    tool.name = name.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, MAX_TOOL_NAME_LEN);
-    if (description) tool.description = description;
-    tool.parameters = parameters;
-    validNames.add(tool.name);
-    return true;
-  });
-  if (body.tool_choice && typeof body.tool_choice === "object" && !Array.isArray(body.tool_choice)) {
-    if (body.tool_choice.type === "function") {
-      const n = typeof body.tool_choice.name === "string" ? body.tool_choice.name.trim() : "";
-      if (!n || !validNames.has(n)) delete body.tool_choice;
-    }
-  }
 }
 
 function sanitizeResponsesItems(body) {
@@ -480,7 +443,9 @@ export class OpenCodeExecutor extends BaseExecutor {
       normalizeOpencodeReasoning(model, body);
       body.stream = true;
       body.store = false;
-      normalizeResponsesTools(body);
+      if (Array.isArray(body.tools)) {
+        body.tools = sanitizeAndCapTools(body.tools, MAX_TOOLS_COUNT);
+      }
       sanitizeResponsesItems(body);
       // Free-tier fingerprint tools are required even when an agent client
       // already supplied tools. ZCode/Claude Code requests normally have
@@ -519,12 +484,12 @@ export class OpenCodeExecutor extends BaseExecutor {
       "Content-Type": "application/json",
       "Authorization": "Bearer public",
       "User-Agent": isOpencodeDownstream ? downstreamUa : OPENCODE_UA,
-      "x-opencode-client": lower["x-opencode-client"] || "desktop",
-      "x-opencode-session": session,
+      "x-opencode-client": lower["x-opencode-client"] || "cli",
       "x-opencode-request": requestId,
       "x-opencode-project": lower["x-opencode-project"] || "global",
       "Accept": stream ? "text/event-stream" : "*/*",
     };
+    injectOpenCodeDualSessionHeaders(headers, session);
     if (url.endsWith("/messages")) headers["anthropic-version"] = ANTHROPIC_API_VERSION;
     return headers;
   }
