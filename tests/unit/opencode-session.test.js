@@ -252,11 +252,12 @@ describe("OpenCode Stable Session Reuse (429 follow-up)", () => {
   it("derives deterministic, canonical request ids per message", () => {
     const session = stableSessionId({ connectionId: "req-conn" });
     const body = { messages: [{ role: "user", content: "ping" }] };
-    const first = deriveRequestId(session, body);
+    const fixedNow = 1700000000000;
+    const first = deriveRequestId(session, body, fixedNow);
     expect(first).toMatch(OPENCODE_REQUEST_RE);
-    expect(deriveRequestId(session, body)).toBe(first);
+    expect(deriveRequestId(session, body, fixedNow)).toBe(first);
     expect(
-      deriveRequestId(session, { messages: [{ role: "user", content: "a different question" }] }),
+      deriveRequestId(session, { messages: [{ role: "user", content: "a different question" }] }, fixedNow),
     ).not.toBe(first);
   });
 
