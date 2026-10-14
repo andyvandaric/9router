@@ -224,21 +224,6 @@ describe("OpenCode Free Muse Spark thinking", () => {
         description: "Run shell command",
         parameters: { type: "object", properties: {} },
       },
-      {
-        type: "function",
-        name: "read",
-        description: "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. Prefer one larger read over many small slices, and use grep to find specific content in large files.",
-        parameters: {
-          type: "object",
-          properties: {
-            path: {
-              type: "string",
-              description: "File or directory to read",
-            },
-          },
-          required: ["path"],
-        },
-      },
     ]);
     expect(out.tools.map((t) => t.name)).toEqual(["shell_client", "read", "shell"]);
     expect(out.input.find((item) => item.type === "function_call").name).toBe("shell_client");
