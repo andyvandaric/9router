@@ -11,6 +11,23 @@
 /** Canonical names required by the upstream free-tier gate. */
 export const OPENCODE_FINGERPRINT_TOOLS = ["bash", "glob", "grep", "read"];
 
+export const OPENCODE_DEFAULT_UA = "opencode/1.19.0";
+export const OPENCODE_DEFAULT_CLIENT = "cli";
+export const OPENCODE_SESSION_HEADER = "x-opencode-session";
+export const OPENCODE_SESSION_ID_HEADER = "x-opencode-session-id";
+export const MAX_TOOLS_COUNT = 128;
+
+// Aliases matching PRD specifications
+export const DEFAULT_OPENCODE_UA = OPENCODE_DEFAULT_UA;
+export const DEFAULT_OPENCODE_CLIENT = OPENCODE_DEFAULT_CLIENT;
+export const OPENCODE_HEADERS = {
+  CLIENT: "x-opencode-client",
+  SESSION: OPENCODE_SESSION_HEADER,
+  SESSION_ID: OPENCODE_SESSION_ID_HEADER,
+  REQUEST: "x-opencode-request",
+  PROJECT: "x-opencode-project",
+};
+
 // Request body -> names renamed for that request. transformRequest() mutates the
 // same body object that chatCore passed into the executor, so a WeakMap keeps the
 // mapping request-local without putting transport metadata on the wire.
@@ -122,9 +139,63 @@ export function retargetToolChoice(body, map) {
 }
 
 /**
+ * Sanitize and cap tools list.
+ * - Filters valid tool objects.
+ * - Normalizes tool names using `name.replace(/[^a-zA-Z0-9_-]/g, "_")`.
+ * - Caps tool count to `maxCount` (default: MAX_TOOLS_COUNT = 128).
+ *
+ * @param {Array} tools
+ * @param {number} [maxCount=MAX_TOOLS_COUNT]
+ * @returns {Array}
+ */
+export function sanitizeAndCapTools(tools, maxCount = MAX_TOOLS_COUNT) {
+  if (!Array.isArray(tools)) return [];
+
+  const sanitized = [];
+  for (const tool of tools) {
+    if (!tool || typeof tool !== "object" || Array.isArray(tool)) continue;
+
+    if (typeof tool.name === "string" && tool.name.trim()) {
+      const cleanName = tool.name.trim().replace(/[^a-zA-Z0-9_-]/g, "_");
+      sanitized.push({ ...tool, name: cleanName });
+      continue;
+    }
+
+    const fn = tool.function;
+    if (fn && typeof fn === "object" && !Array.isArray(fn) && typeof fn.name === "string" && fn.name.trim()) {
+      const cleanName = fn.name.trim().replace(/[^a-zA-Z0-9_-]/g, "_");
+      sanitized.push({ ...tool, function: { ...fn, name: cleanName } });
+      continue;
+    }
+
+    // Keep tool object even if without standard name structure
+    sanitized.push(tool);
+  }
+
+  return sanitized.slice(0, maxCount);
+}
+
+/**
+ * Injects dual OpenCode session headers ensuring both headers carry identical sessionId.
+ *
+ * @param {object} headers
+ * @param {string} sessionId
+ * @returns {object} headers
+ */
+export function injectOpenCodeDualSessionHeaders(headers, sessionId) {
+  if (!headers || typeof headers !== "object") return headers;
+  headers[OPENCODE_SESSION_HEADER] = sessionId;
+  headers[OPENCODE_SESSION_ID_HEADER] = sessionId;
+  return headers;
+}
+
+// Alias matching Phase 1 PRD spec
+export const applyOpenCodeSessionHeaders = injectOpenCodeDualSessionHeaders;
+
+/**
  * Full request-side pass: canonicalise quartet case variants, remove duplicate
- * quartet declarations, append missing members and preserve the legacy
- * tool_choice defaults used by the OpenCode executor.
+ * quartet declarations, append missing members, sanitize & cap tools at max 128 items,
+ * and preserve the legacy tool_choice defaults used by the OpenCode executor.
  *
  * @param {object} body
  * @param {boolean} flat - true for Responses tools ({name}), false for chat tools
@@ -135,7 +206,15 @@ export function applyFingerprintTools(body, flat) {
 
   const hadClientTools = Array.isArray(body.tools) && body.tools.length > 0;
   const { tools, map } = concealFingerprintToolNames(body.tools);
-  body.tools = appendMissingFingerprintTools(tools, flat);
+
+  // If user provided tools, cap them to leave room for any missing quartet members (up to 4)
+  const maxUserTools = Math.max(0, MAX_TOOLS_COUNT - OPENCODE_FINGERPRINT_TOOLS.length);
+  const cappedUserTools = Array.isArray(tools) && tools.length > maxUserTools
+    ? tools.slice(0, maxUserTools)
+    : tools;
+
+  const withDecoys = appendMissingFingerprintTools(cappedUserTools, flat);
+  body.tools = sanitizeAndCapTools(withDecoys, MAX_TOOLS_COUNT);
   retargetToolChoice(body, map);
 
   // Preserve the existing executor semantics. Responses uses auto when the

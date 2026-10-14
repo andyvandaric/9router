@@ -6,7 +6,16 @@ import {
   fingerprintToolKey,
   restoreToolNames,
   takeRenamedToolNames,
+  sanitizeAndCapTools,
+  injectOpenCodeDualSessionHeaders,
+  applyOpenCodeSessionHeaders,
   OPENCODE_FINGERPRINT_TOOLS,
+  OPENCODE_DEFAULT_UA,
+  OPENCODE_DEFAULT_CLIENT,
+  OPENCODE_SESSION_HEADER,
+  OPENCODE_SESSION_ID_HEADER,
+  MAX_TOOLS_COUNT,
+  OPENCODE_HEADERS,
 } from "open-sse/utils/opencodeFingerprint.js";
 
 const CC_TOOLS = ["Task", "Bash", "Glob", "Grep", "Read", "Edit", "Write", "WebFetch"];
@@ -187,5 +196,90 @@ describe("fingerprintToolKey", () => {
     expect(fingerprintToolKey("Edit")).toBe("");
     expect(fingerprintToolKey("terminal")).toBe("");
     expect(fingerprintToolKey(null)).toBe("");
+  });
+});
+
+describe("opencodeFingerprint — Wave 1 contract & constants", () => {
+  it("exports standard header constants and limits", () => {
+    expect(OPENCODE_DEFAULT_UA).toBe("opencode/1.19.0");
+    expect(OPENCODE_DEFAULT_CLIENT).toBe("cli");
+    expect(OPENCODE_SESSION_HEADER).toBe("x-opencode-session");
+    expect(OPENCODE_SESSION_ID_HEADER).toBe("x-opencode-session-id");
+    expect(MAX_TOOLS_COUNT).toBe(128);
+
+    expect(OPENCODE_HEADERS.SESSION).toBe("x-opencode-session");
+    expect(OPENCODE_HEADERS.SESSION_ID).toBe("x-opencode-session-id");
+    expect(OPENCODE_HEADERS.CLIENT).toBe("x-opencode-client");
+  });
+
+  it("injectOpenCodeDualSessionHeaders injects identical session IDs into both headers", () => {
+    const headers = { "Content-Type": "application/json" };
+    const sessionId = "ses_abcdef0123456789ABCDEF";
+
+    const res = injectOpenCodeDualSessionHeaders(headers, sessionId);
+    expect(res).toBe(headers);
+    expect(headers["x-opencode-session"]).toBe(sessionId);
+    expect(headers["x-opencode-session-id"]).toBe(sessionId);
+
+    // Test alias
+    const headers2 = {};
+    applyOpenCodeSessionHeaders(headers2, sessionId);
+    expect(headers2["x-opencode-session"]).toBe(sessionId);
+    expect(headers2["x-opencode-session-id"]).toBe(sessionId);
+  });
+
+  it("injectOpenCodeDualSessionHeaders handles non-object inputs safely", () => {
+    expect(injectOpenCodeDualSessionHeaders(null, "ses_123")).toBeNull();
+    expect(injectOpenCodeDualSessionHeaders(undefined, "ses_123")).toBeUndefined();
+    expect(injectOpenCodeDualSessionHeaders("invalid", "ses_123")).toBe("invalid");
+  });
+
+  it("sanitizeAndCapTools filters invalid items, normalizes names, and caps count", () => {
+    const rawTools = [
+      null,
+      undefined,
+      "not an object",
+      { name: "tool:calc@v1" }, // invalid chars -> sanitized
+      { function: { name: "my.action-runner_2" } }, // invalid dot -> sanitized
+      { name: "clean_name-123" },
+    ];
+
+    const sanitized = sanitizeAndCapTools(rawTools, 128);
+    expect(sanitized).toHaveLength(3);
+    expect(sanitized[0].name).toBe("tool_calc_v1");
+    expect(sanitized[1].function.name).toBe("my_action-runner_2");
+    expect(sanitized[2].name).toBe("clean_name-123");
+
+    // Test capping
+    const manyTools = Array.from({ length: 150 }, (_, i) => ({ name: `tool_${i}` }));
+    const capped = sanitizeAndCapTools(manyTools, 128);
+    expect(capped).toHaveLength(128);
+    expect(capped[0].name).toBe("tool_0");
+    expect(capped[127].name).toBe("tool_127");
+  });
+
+  it("applyFingerprintTools automatically caps tools at 128 items and normalizes names", () => {
+    const manyTools = Array.from({ length: 140 }, (_, i) => ({
+      type: "function",
+      name: `custom:tool:${i}`,
+    }));
+
+    const body = { tools: manyTools };
+    applyFingerprintTools(body, true);
+
+    expect(body.tools.length).toBeLessThanOrEqual(MAX_TOOLS_COUNT);
+    expect(body.tools.length).toBe(128);
+
+    // Fingerprint quartet should be preserved
+    const names = body.tools.map((t) => t.name);
+    expect(names).toContain("bash");
+    expect(names).toContain("glob");
+    expect(names).toContain("grep");
+    expect(names).toContain("read");
+
+    // All custom tool names sanitized
+    for (const tool of body.tools) {
+      expect(tool.name).toMatch(/^[a-zA-Z0-9_-]+$/);
+    }
   });
 });
