@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { PROVIDERS } from "../../open-sse/config/providers.js";
 import { OpenCodeExecutor } from "../../open-sse/executors/opencode.js";
 import { proxyAwareFetch } from "../../open-sse/utils/proxyFetch.js";
+import { OPENCODE_FINGERPRINT_TOOLS } from "../../open-sse/utils/opencodeFingerprint.js";
 
 vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
   proxyAwareFetch: vi.fn(async () => ({ ok: true, status: 200, headers: { get: () => "" } })),
@@ -13,12 +14,9 @@ const FREE_13 = "muse-spark-1.3-contributor-free";
 const CREDS = { connectionId: "opencode-free-tool-choice-test" };
 const INPUT = [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }];
 const TOOLS = [{ type: "function", name: "get_weather", description: "w", parameters: { type: "object", properties: {} } }];
-const FINGERPRINT_TOOL_NAMES = ["read", "shell"];
-
-function expectToolsWithFingerprint(tools) {
-  const names = tools.map((tool) => tool.name);
-  expect(names).toEqual([...TOOLS.map((tool) => tool.name), ...FINGERPRINT_TOOL_NAMES]);
-}
+// Free-tier gate: client tools pass through verbatim, then the fingerprint
+// read/shell definitions are appended or upstream answers 403 FreeTierError.
+const WIRE_TOOLS = [...TOOLS, ...OPENCODE_FINGERPRINT_TOOLS.map((name) => expect.objectContaining({ type: "function", name }))];
 
 function responsesBody(model, tool_choice) {
   const body = { model, input: structuredClone(INPUT), tools: structuredClone(TOOLS) };
@@ -42,7 +40,7 @@ describe("opencode Free 1.3 tool_choice auto-only", () => {
       const body = responsesBody(model, structuredClone(choice));
       const out = new OpenCodeExecutor().transformRequest(model, body, true, CREDS);
       expect(out.tool_choice).toBe("auto");
-      expectToolsWithFingerprint(out.tools);
+      expect(out.tools).toEqual(WIRE_TOOLS);
       expect(out.input).toEqual(INPUT);
     }
   });
@@ -52,14 +50,15 @@ describe("opencode Free 1.3 tool_choice auto-only", () => {
       FREE_13, responsesBody(FREE_13, "auto"), true, CREDS,
     );
     expect(autoOut.tool_choice).toBe("auto");
-    expectToolsWithFingerprint(autoOut.tools);
+    expect(autoOut.tools).toEqual(WIRE_TOOLS);
     expect(autoOut.input).toEqual(INPUT);
 
     const absentOut = new OpenCodeExecutor().transformRequest(
       FREE_13, responsesBody(FREE_13, undefined), true, CREDS,
     );
+    // Fingerprint pass fills an absent choice with "auto" (the API default once tools exist).
     expect(absentOut.tool_choice).toBe("auto");
-    expectToolsWithFingerprint(absentOut.tools);
+    expect(absentOut.tools).toEqual(WIRE_TOOLS);
     expect(absentOut.input).toEqual(INPUT);
   });
 
@@ -75,7 +74,7 @@ describe("opencode Free 1.3 tool_choice auto-only", () => {
     expect(out.tool_choice).toEqual(choice);
   });
 
-  it("wire: execute gửi choice auto tới /zen/v1/responses", async () => {
+  it("wire: execute gửi choice auto tới /inference/v1/responses", async () => {
     proxyAwareFetch.mockClear();
     const ex = new OpenCodeExecutor();
     const body = responsesBody(FREE_13, { type: "function", name: "get_weather" });
@@ -90,7 +89,7 @@ describe("opencode Free 1.3 tool_choice auto-only", () => {
     const sent = JSON.parse(actualInit.body);
     expect(sent.tool_choice).toBe("auto");
     expect(sent.model).toBe(FREE_13);
-    expectToolsWithFingerprint(sent.tools);
+    expect(sent.tools).toEqual(WIRE_TOOLS);
     expect(sent.input).toEqual(INPUT);
   });
 });
