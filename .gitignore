@@ -101,3 +101,7 @@ graphify-out/*
 .start-dev.ps1
 start-dev-silent.cjs
 debug.log
+
+# merge/patch residue from build utilities
+*.orig
+*.rej
