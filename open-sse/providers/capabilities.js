@@ -234,6 +234,15 @@ export const PROVIDER_CAPABILITIES = {
     // catalog overlay, so maxOutput must be stated here too).
     "claude-haiku-5-5": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
   },
+  // OpenCode Free (/inference/v1) is OpenAI-compatible and rejects BOTH z.ai
+  // reasoning shapes with 400 `unknown field` — `thinking` and `enable_thinking`
+  // — while accepting reasoning_effort (live wire probes 2026-10-17: low|high|max
+  // → 200, thinking:{enabled} → 400, enable_thinking:true → 400). Same root cause
+  // as the opencode-go override above; the global entry's z.ai shape is correct
+  // for z.ai itself. glm-5.3-flash-free is the only GLM id on this catalog.
+  "opencode": {
+    "glm-5.3-flash-free": { vision: true, videoInput: true, pdf: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 131072 },
+  },
   "commandcode": {
     // The generic commandcode fallback (1M/384k for every unlisted model) happened
     // to give haiku-5-5 the right context by accident. Pin it to the catalog values:
@@ -373,6 +382,8 @@ PROVIDER_CAPABILITIES.dv = PROVIDER_CAPABILITIES["devin-cli"];
 PROVIDER_CAPABILITIES.devin = PROVIDER_CAPABILITIES["devin-cli"];
 // The global mcode site serves the same catalog — share the capability table.
 PROVIDER_CAPABILITIES["minimax-code-global"] = PROVIDER_CAPABILITIES["minimax-code"];
+// The OpenCode free lane is addressed as "oc" in combos/model ids.
+PROVIDER_CAPABILITIES.oc = PROVIDER_CAPABILITIES.opencode;
 
 /**
  * Pattern fallback — glob (* = wildcard), matched case-insensitively and
