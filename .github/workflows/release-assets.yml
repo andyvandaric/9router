@@ -74,10 +74,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
+          # NOTE: package-lock.json is gitignored in this repo, so no npm cache
+          # and no `npm ci` — `npm install` resolves from package.json directly.
 
       - name: Install root dependencies
-        run: npm ci
+        run: npm install --no-audit --no-fund
 
       - name: Build CLI package tarball
         run: npm run cli:pack
