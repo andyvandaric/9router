@@ -82,3 +82,111 @@ describe("opencode stable-session rotation on free-tier 429", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+// Live 2026-10-17: an exhausted/blackholed stable session answers the free-tier
+// gate with 403 FreeTierError (not 429). Without rotation the identity stays
+// poisoned for the whole session TTL, so combos silently fall back to another
+// provider and the opencode member never recovers.
+const FREE_TIER_BODY = JSON.stringify({
+  type: "error",
+  error: {
+    type: "FreeTierError",
+    message: "OpenCode's free tier can only be used from within OpenCode.",
+  },
+});
+
+function freeTierForbiddenStub() {
+  return {
+    ok: false,
+    status: 403,
+    headers: { get: () => "application/json" },
+    text: async () => FREE_TIER_BODY,
+    json: async () => JSON.parse(FREE_TIER_BODY),
+    // The executor peeks at a clone to detect the gate marker.
+    clone() {
+      return freeTierForbiddenStub();
+    },
+  };
+}
+
+function nonGateForbiddenStub() {
+  return {
+    ok: false,
+    status: 403,
+    headers: { get: () => "application/json" },
+    text: async () => JSON.stringify({ error: { type: "permission_error", message: "quota exhausted" } }),
+    json: async () => ({ error: { type: "permission_error", message: "quota exhausted" } }),
+    clone() {
+      return nonGateForbiddenStub();
+    },
+  };
+}
+
+describe("opencode stable-session rotation on free-tier 403", () => {
+  it("evicts the stable session and retries once with a fresh session", async () => {
+    fetchMock
+      .mockResolvedValueOnce(freeTierForbiddenStub())
+      .mockResolvedValueOnce(responseStub(200));
+
+    const ex = new OpenCodeExecutor();
+    const out = await ex.execute({
+      model: "glm-5.3-flash-free",
+      body: structuredClone(CHAT_BODY),
+      stream: true,
+      credentials: { ...CREDS },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const firstSession = fetchMock.mock.calls[0][1].headers["x-opencode-session"];
+    const secondSession = fetchMock.mock.calls[1][1].headers["x-opencode-session"];
+    expect(firstSession).toMatch(OPENCODE_SESSION_RE);
+    expect(secondSession).toMatch(OPENCODE_SESSION_RE);
+    expect(secondSession).not.toBe(firstSession);
+    expect(out.response.status).toBe(200);
+  });
+
+  it("does not rotate native client sessions on 403", async () => {
+    fetchMock.mockResolvedValue(freeTierForbiddenStub());
+
+    const ex = new OpenCodeExecutor();
+    await ex.execute({
+      model: "glm-5.3-flash-free",
+      body: structuredClone(CHAT_BODY),
+      stream: true,
+      credentials: { rawHeaders: { "x-opencode-session": NATIVE_SESSION } },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1].headers["x-opencode-session"]).toBe(NATIVE_SESSION);
+  });
+
+  it("still surfaces a 403 once a fresh session is also rejected", async () => {
+    fetchMock.mockResolvedValue(freeTierForbiddenStub());
+
+    const ex = new OpenCodeExecutor();
+    const out = await ex.execute({
+      model: "glm-5.3-flash-free",
+      body: structuredClone(CHAT_BODY),
+      stream: true,
+      credentials: { ...CREDS_ALT },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(out.response.status).toBe(403);
+  });
+
+  it("leaves a non-gate 403 untouched — no rotation", async () => {
+    fetchMock.mockResolvedValue(nonGateForbiddenStub());
+
+    const ex = new OpenCodeExecutor();
+    const out = await ex.execute({
+      model: "glm-5.3-flash-free",
+      body: structuredClone(CHAT_BODY),
+      stream: true,
+      credentials: { ...CREDS },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(out.response.status).toBe(403);
+  });
+});

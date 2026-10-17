@@ -120,9 +120,25 @@ const MAX_STABLE_SESSIONS = 1000;
 // caller and must pass through untouched.
 const SESSION_SOURCE = { native: "native", derived: "derived", stable: "stable" };
 
-/** Delete the stable session entry for this identity (used when upstream 429s). */
+/** Delete the stable session entry for this identity (upstream rejected it). */
 export function evictStableSession(credentials) {
   stableOpencodeSessions.delete(identityKey(credentials));
+}
+
+// The free-tier gate answers a stale or exhausted session with 403
+// FreeTierError (429 FreeUsageLimitError is the older shape). Only this marker
+// may trigger a rotation — other 403s (auth, permissions) pass through as-is.
+const FREE_TIER_ERROR_MARKER = "FreeTierError";
+
+async function isFreeTierRejection(response) {
+  if (response?.status !== HTTP_STATUS.FORBIDDEN) return false;
+  try {
+    // Inspect a clone so the caller still receives the original body.
+    const text = await response.clone().text();
+    return text.includes(FREE_TIER_ERROR_MARKER);
+  } catch {
+    return false;
+  }
 }
 const stableSessionCleanup = setInterval(() => {
   const now = Date.now();
@@ -387,11 +403,15 @@ export class OpenCodeExecutor extends BaseExecutor {
   async execute(args) {
     const prepared = this.prepareRequestCredentials(args);
     const result = await super.execute({ ...args, credentials: prepared });
-    if (prepared._opencodeSessionSource !== SESSION_SOURCE.stable
-      || result?.response?.status !== HTTP_STATUS.RATE_LIMITED) return result;
-    // Free-tier 429 can blackhole exactly one stable session while fresh
-    // sessions succeed (live probes 2026-10-17). Evict and retry once with
-    // a regenerated session before surfacing the failure to the client.
+    if (prepared._opencodeSessionSource !== SESSION_SOURCE.stable) return result;
+    // Upstream blackholes exactly one stable session while fresh sessions
+    // succeed (live probes 2026-10-17). A 429 keeps rotating as before; the
+    // gate now answers a stale/exhausted session with 403 FreeTierError, which
+    // would otherwise pin the identity for the whole sessionTtlMs window
+    // (2h). Evict and retry once with a regenerated session.
+    const rotates = result?.response?.status === HTTP_STATUS.RATE_LIMITED
+      || await isFreeTierRejection(result?.response);
+    if (!rotates) return result;
     evictStableSession(prepared);
     return super.execute({ ...args, credentials: this.prepareRequestCredentials(args) });
   }
