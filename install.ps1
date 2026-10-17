@@ -128,7 +128,14 @@ try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::S
 $tmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "9router-install") -Force
 $tgz = Join-Path $tmp.FullName "9router.tgz"
 Write-Step "Downloading $downloadUrl"
-Invoke-WebRequest -Uri $downloadUrl -OutFile $tgz -UseBasicParsing
+$downloadUri = [Uri]$downloadUrl
+if ($downloadUri.Scheme -eq "file") {
+  # Local tarball (offline install / pinned-ci testing): plain copy.
+  Copy-Item -LiteralPath $downloadUri.LocalPath -Destination $tgz -Force
+  if (-not (Test-Path $tgz)) { throw "Local tarball not found: $($downloadUri.LocalPath)" }
+} else {
+  Invoke-WebRequest -Uri $downloadUrl -OutFile $tgz -UseBasicParsing
+}
 if (-not (Test-Path $tgz) -or (Get-Item $tgz).Length -lt 1MB) { throw "Downloaded tarball looks invalid" }
 Write-Okay "Saved $([Math]::Round((Get-Item $tgz).Length / 1MB, 1)) MB"
 
