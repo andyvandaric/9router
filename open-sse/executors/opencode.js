@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { BaseExecutor } from "./base.js";
 import { PROVIDERS } from "../config/providers.js";
-import { MEMORY_CONFIG } from "../config/runtimeConfig.js";
+import { HTTP_STATUS, MEMORY_CONFIG } from "../config/runtimeConfig.js";
 import { getThinkingLevels } from "../providers/thinkingLevels.js";
 import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
@@ -114,6 +114,16 @@ function nativeSession(headers) {
 // after MEMORY_CONFIG.sessionTtlMs like the other session stores.
 const stableOpencodeSessions = new Map();
 const MAX_STABLE_SESSIONS = 1000;
+
+// Where a request's session came from. Only "stable" (self-minted, per-identity)
+// sessions are safe to rotate: native and derived sessions are dictated by the
+// caller and must pass through untouched.
+const SESSION_SOURCE = { native: "native", derived: "derived", stable: "stable" };
+
+/** Delete the stable session entry for this identity (used when upstream 429s). */
+export function evictStableSession(credentials) {
+  stableOpencodeSessions.delete(identityKey(credentials));
+}
 const stableSessionCleanup = setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of stableOpencodeSessions) {
@@ -202,7 +212,7 @@ function isMessagesModel(model) {
 function resolveOpencodeSession(body, credentials, providerSessionId, clientTool) {
   const headers = credentials?.rawHeaders || {};
   const native = nativeSession(headers);
-  if (native) return native;
+  if (native) return { session: native, source: SESSION_SOURCE.native };
 
   let incoming = null;
   for (const [key, value] of Object.entries(headers)) {
@@ -213,7 +223,7 @@ function resolveOpencodeSession(body, credentials, providerSessionId, clientTool
   }
 
   const hinted = incoming || normalizeSession(providerSessionId);
-  if (hinted) return translateSessionId(hinted, clientTool);
+  if (hinted) return { session: translateSessionId(hinted, clientTool), source: SESSION_SOURCE.derived };
 
   if (credentials?.connectionId || bodyHasSessionHints(body)) {
     let viaManager = null;
@@ -227,10 +237,10 @@ function resolveOpencodeSession(body, credentials, providerSessionId, clientTool
     } catch {
       viaManager = null;
     }
-    if (viaManager) return translateSessionId(viaManager, clientTool);
+    if (viaManager) return { session: translateSessionId(viaManager, clientTool), source: SESSION_SOURCE.derived };
   }
 
-  return stableSessionId(credentials);
+  return { session: stableSessionId(credentials), source: SESSION_SOURCE.stable };
 }
 
 function normalizeResponsesTools(body) {
@@ -326,11 +336,12 @@ export class OpenCodeExecutor extends BaseExecutor {
 
   prepareRequestCredentials({ body, credentials, providerSessionId, clientTool } = {}) {
     const sourceCredentials = credentials || {};
-    const session = resolveOpencodeSession(body, sourceCredentials, providerSessionId, clientTool);
+    const { session, source } = resolveOpencodeSession(body, sourceCredentials, providerSessionId, clientTool);
 
     return {
       ...sourceCredentials,
       [SESSION_FIELD]: session,
+      _opencodeSessionSource: source,
     };
   }
 
@@ -374,6 +385,14 @@ export class OpenCodeExecutor extends BaseExecutor {
   }
 
   async execute(args) {
+    const prepared = this.prepareRequestCredentials(args);
+    const result = await super.execute({ ...args, credentials: prepared });
+    if (prepared._opencodeSessionSource !== SESSION_SOURCE.stable
+      || result?.response?.status !== HTTP_STATUS.RATE_LIMITED) return result;
+    // Free-tier 429 can blackhole exactly one stable session while fresh
+    // sessions succeed (live probes 2026-10-17). Evict and retry once with
+    // a regenerated session before surfacing the failure to the client.
+    evictStableSession(prepared);
     return super.execute({ ...args, credentials: this.prepareRequestCredentials(args) });
   }
 
