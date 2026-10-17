@@ -1,0 +1,162 @@
+name: Publish release assets
+
+on:
+  push:
+    tags:
+      - "v*-andyvandaric-patch"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing fork-patch tag to build assets for"
+        required: true
+        type: string
+
+# Keep every release in one FIFO queue: an older run finishing after a newer
+# one must never regress the 9router-latest.tgz alias backwards.
+concurrency:
+  group: release-assets-${{ github.repository }}
+  cancel-in-progress: false
+  queue: max
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Build and attach release assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref_name }}
+          fetch-depth: 1
+
+      - name: Validate tag and package versions
+        id: validate
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+          const rootVersion = require("./package.json").version;
+          const cliVersion = require("./cli/package.json").version;
+          const tag = process.env.RELEASE_TAG || "";
+          const suffix = "-andyvandaric-patch";
+
+          if (!tag.startsWith("v") || !tag.endsWith(suffix)) {
+            console.error(`Expected a fork-patch tag like v0.5.104${suffix}, received: ${tag || "<empty>"}`);
+            process.exit(1);
+          }
+
+          const version = tag.slice(1, -suffix.length);
+          if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(version)) {
+            console.error(`Tag must be vX.Y.Z${suffix}, received: ${tag}`);
+            process.exit(1);
+          }
+
+          if (rootVersion !== version) {
+            console.error(`package.json version ${rootVersion} does not match tag ${tag}`);
+            process.exit(1);
+          }
+          if (cliVersion !== version) {
+            console.error(`cli/package.json version ${cliVersion} does not match tag ${tag}`);
+            process.exit(1);
+          }
+
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag=${tag}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+          console.log(`Validated ${tag} against version ${version}`);
+          NODE
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Build CLI package tarball
+        run: npm run cli:pack
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        env:
+          VERSION: ${{ steps.validate.outputs.version }}
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+          const version = process.env.VERSION || "";
+          const target = `v${version}-andyvandaric-patch`;
+          const lines = fs.readFileSync("CHANGELOG.md", "utf8").split(/\r?\n/);
+
+          const idx = lines.findIndex((line) => {
+            if (!/^#\s+v/.test(line)) return false;
+            const heading = line.replace(/^#\s+/, "");
+            return heading === target || heading.startsWith(`${target} `) || heading.startsWith(`${target}(`);
+          });
+
+          if (idx === -1) {
+            console.log(`No CHANGELOG section for ${target}; falling back to generated notes`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, "has_notes=false\n");
+            process.exit(0);
+          }
+
+          let end = lines.length;
+          for (let i = idx + 1; i < lines.length; i++) {
+            if (/^#\s+v/.test(lines[i])) { end = i; break; }
+          }
+          const body = lines.slice(idx, end).join("\n").trim();
+          if (!body) {
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, "has_notes=false\n");
+            process.exit(0);
+          }
+          fs.writeFileSync("release-notes.md", body + "\n");
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, "has_notes=true\n");
+          console.log(`Extracted ${target} notes (${body.length} chars)`);
+          NODE
+
+      - name: Ensure GitHub release exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.validate.outputs.tag }}
+          HAS_NOTES: ${{ steps.notes.outputs.has_notes }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists"
+          elif [ "$HAS_NOTES" = "true" ]; then
+            gh release create "$TAG" --title "9Router $TAG" --notes-file release-notes.md --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" --title "9Router $TAG" --generate-notes --repo "$GITHUB_REPOSITORY"
+          fi
+
+      - name: Upload versioned and latest assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.validate.outputs.tag }}
+          VERSION: ${{ steps.validate.outputs.version }}
+        run: |
+          test -s "9router-${VERSION}.tgz" || { echo "Tarball 9router-${VERSION}.tgz missing after cli:pack" >&2; exit 1; }
+          cp "9router-${VERSION}.tgz" "9router-latest.tgz"
+          gh release upload "$TAG" "9router-${VERSION}.tgz" "9router-latest.tgz" \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Verify latest alias serves this release
+        env:
+          TAG: ${{ steps.validate.outputs.tag }}
+          VERSION: ${{ steps.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          tarball="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/9router-latest.tgz"
+          status="$(curl -s -o /dev/null -w '%{http_code}' -L --max-time 60 "$tarball")"
+          if [ "$status" != "200" ]; then
+            echo "Latest alias for ${TAG} returned HTTP ${status}" >&2
+            exit 1
+          fi
+          echo "### Release assets published" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`9router-${VERSION}.tgz\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`9router-latest.tgz\` (alias, always newest fork-patch)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- latest alias URL: HTTP 200" >> "$GITHUB_STEP_SUMMARY"

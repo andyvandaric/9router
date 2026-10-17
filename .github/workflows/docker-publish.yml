@@ -62,7 +62,15 @@ jobs:
           const { execFileSync } = require("child_process");
 
           const tag = process.env.RELEASE_TAG || "";
-          const match = /^v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)$/.exec(tag);
+          // Fork patch tags (vX.Y.Z-andyvandaric-patch) validate against their
+          // base semver: the suffix marks a fork patch of the same upstream
+          // version, keeping package.json comparisons and Docker/GHCR tags on
+          // the shared base-version namespace.
+          const FORK_PATCH_SUFFIX = "-andyvandaric-patch";
+          const normalizedTag = tag.endsWith(FORK_PATCH_SUFFIX)
+            ? tag.slice(0, -FORK_PATCH_SUFFIX.length)
+            : tag;
+          const match = /^v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)$/.exec(normalizedTag);
 
           if (tag.includes("+")) {
             console.error(`Build metadata is not supported in Docker release tags: ${tag}`);
