@@ -1,3 +1,10 @@
+# v0.5.105-andyvandaric-patch (2026-10-17, fork)
+
+## Fixes (fork: OpenCode free-tier registry truth + release automation)
+- **OpenCode registry**: restore `muse-spark-1.2-contributor-free` — dashboard live probe returns HTTP 200 while the `/models` listing omits it; only `muse-spark-1.3-contributor-free` is deprecated upstream (410 `ModelDeprecated`). `union-alpha` stays out of the registry (removed from the free tier).
+- **CI (docker-publish)**: fork-patch tags (`vX.Y.Z-andyvandaric-patch`) now validate against their base semver instead of failing the tag↔package.json equality check.
+- **CI (release-assets)**: new one-shot pipeline on fork-patch tag push — builds the CLI tarball (`npm run cli:pack`), creates/updates the GitHub release with notes extracted from this CHANGELOG, and attaches `9router-<version>.tgz` plus the `9router-latest.tgz` alias (`--clobber`) so the README install URL always serves the newest fork patch. FIFO-concurrency-guarded against alias regression.
+
 # v0.5.104-andyvandaric-patch (2026-10-17, fork)
 
 ## Fixes (fork: upstream sync + OpenCode free-tier resilience)
