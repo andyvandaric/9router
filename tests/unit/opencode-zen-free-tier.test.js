@@ -71,14 +71,19 @@ describe("OpenCode Zen session header contract", () => {
   });
 });
 
-describe("OpenCodeZenExecutor free-tier auth", () => {
-  it("sends Bearer public + session + request ids for free-tier models", () => {
-    const headers = headersFor("mimo-v2.6-flash-free");
+describe("OpenCodeZenExecutor free-tier auth and v2 fingerprint", () => {
+  it("sends Bearer public + v2 session headers and omits x-opencode-request for free-tier models", () => {
+    const headers = headersFor("mimo-v2.6-flash-free", {
+      rawHeaders: { "x-opencode-request": "msg_0ae8d9cd3001swxaFbM248jcIF" },
+    });
     expect(headers["Authorization"]).toBe("Bearer public");
     expect(headers["x-opencode-session"]).toMatch(OPENCODE_SESSION_RE);
-    expect(headers["x-opencode-request"]).toMatch(/^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
-    expect(headers["x-opencode-client"]).toBe("desktop");
-    expect(headers["User-Agent"]).toMatch(/opencode\/\d+\.\d+/i);
+    expect(headers["x-opencode-session-id"]).toBe(headers["x-opencode-session"]);
+    expect(headers["x-session-affinity"]).toBe(headers["x-opencode-session"]);
+    expect(headers["x-session-id"]).toBe(headers["x-opencode-session"]);
+    expect(headers["x-opencode-request"]).toBeUndefined();
+    expect(headers["x-opencode-client"]).toBe("cli");
+    expect(headers["User-Agent"]).toBe("opencode/latest/2.0.29/cli");
   });
 
   it("does the same for responses-endpoint free models", () => {
@@ -87,7 +92,9 @@ describe("OpenCodeZenExecutor free-tier auth", () => {
       {},
     );
     expect(headers["Authorization"]).toBe("Bearer public");
-    expect(headers["x-opencode-request"]).toMatch(/^msg_/);
+    expect(headers["x-opencode-request"]).toBeUndefined();
+    expect(headers["x-opencode-client"]).toBe("cli");
+    expect(headers["User-Agent"]).toBe("opencode/latest/2.0.29/cli");
   });
 
   it("keeps the connection key for paid models", () => {
@@ -95,5 +102,20 @@ describe("OpenCodeZenExecutor free-tier auth", () => {
     expect(headers["Authorization"]).toBe("Bearer oc_sk_test_key");
     expect(headers["x-opencode-request"]).toBeUndefined();
     expect(headers["x-opencode-session"]).toMatch(OPENCODE_SESSION_RE);
+  });
+
+  it("injects verbatim read/shell fingerprint tools for chat and responses payloads", () => {
+    const executor = new OpenCodeZenExecutor();
+    const chatOut = executor.transformRequest("mimo-v2.6-flash-free", {
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(chatOut.tools.map((t) => t.function?.name)).toEqual(["read", "shell"]);
+    expect(chatOut.tools[0].function.parameters.required).toEqual(["path"]);
+
+    const responsesOut = executor.transformRequest("muse-spark-1.3-contributor-free", {
+      input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+    });
+    expect(responsesOut.tools.map((t) => t.name)).toEqual(["read", "shell"]);
+    expect(responsesOut.tools[0].parameters.required).toEqual(["path"]);
   });
 });

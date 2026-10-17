@@ -1,4 +1,5 @@
-import { ProxyAgent, fetch as undiciFetch } from "undici";
+import { fetch as undiciFetch } from "undici";
+import { createProxyDispatcher } from "../../../open-sse/utils/proxyDispatcher.js";
 
 const DEFAULT_TEST_URL = "https://google.com/";
 const DEFAULT_TIMEOUT_MS = 8000;
@@ -42,7 +43,7 @@ export async function testProxyUrl({ proxyUrl, testUrl, timeoutMs } = {}) {
 
   try {
     try {
-      dispatcher = new ProxyAgent({ uri: normalizedProxyUrl });
+      dispatcher = await createProxyDispatcher({ uri: normalizedProxyUrl });
     } catch (err) {
       return {
         ok: false,
