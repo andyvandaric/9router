@@ -179,38 +179,72 @@ if ($stopped) { Write-Okay "Nothing is running and port $Port is free" }
 else { Write-Warn2 "Processes kept reappearing -- continuing anyway (install is user-dir, unaffected)" }
 $script:didStop = $true
 
-# 5. Purge the stale global install (prevents PATH shadowing) -------------
-# Best-effort only: a locked nvm global dir must never block the user-dir
-# install below. Leftover npm staging dirs get the same treatment.
-Write-Step "Removing stale global npm install (if any)"
-if (Invoke-Tolerant { & npm ls -g 9router 2>&1 | Out-Null }) {
-  $purged = Invoke-Tolerant { & npm uninstall -g 9router 2>&1 | Out-Null }
-  if ($purged) { Write-Okay "Global 9router removed" }
-  else {
-    Write-Warn2 "Global removal blocked (EBUSY) -- retrying once after a stop sweep"
+# 5. npm-prefix copy (acs-managed) OR stale-global purge (standalone) ------
+# The acs daemon supervises <npm-prefix>\node_modules\9router and SELF-HEALS it
+# when missing (an opaque `npm i -g 9router` that pulls the official upstream
+# 0.5.104 from npmjs). Purging the global on an acs-managed box therefore
+# downgrades the service right back. Upgrade that supervised copy to the fork
+# instead; only standalone installs get the traditional purge.
+Write-Step "Preparing the npm-prefix copy the daemon supervises"
+$prefixVersion = $null
+$npmPrefixLog = Join-Path $tmp.FullName "npm-prefix-install.log"
+if ($acs) {
+  $npmPrefix = (& npm config get prefix | Select-Object -First 1)
+  if ($npmPrefix) { $npmPrefix = $npmPrefix.Trim() }
+  $prefixOk = Invoke-Tolerant { & npm install -g $tgz *> $npmPrefixLog }
+  if (-not $prefixOk) {
+    Write-Warn2 "Prefix install blocked -- sweeping processes and retrying once"
     Stop-All9Router | Out-Null
-    $purged = Invoke-Tolerant { & npm uninstall -g 9router 2>&1 | Out-Null }
-    if ($purged) { Write-Okay "Global 9router removed on retry" }
-    else { Write-Warn2 "Global copy remains; user-dir install proceeds and wins PATH (newest entry)" }
+    Start-Sleep -Seconds 2
+    $prefixOk = Invoke-Tolerant { & npm install -g $tgz *> $npmPrefixLog }
   }
-} else { Write-Okay "No global install to purge" }
+  if ($prefixOk) {
+    $prefixPkg = Join-Path $npmPrefix "node_modules\9router\package.json"
+    if (Test-Path $prefixPkg) {
+      $prefixVersion = (Get-Content $prefixPkg -Raw | ConvertFrom-Json).version
+      Write-Okay "npm-prefix now at v$prefixVersion (daemon-managed path)"
+    } else { Write-Warn2 "Prefix install reported success but package dir is missing" }
+  } else {
+    Get-Content $npmPrefixLog -Tail 10 -ErrorAction SilentlyContinue | ForEach-Object { Write-Warn2 $_ }
+    Write-Warn2 "Prefix upgrade failed -- daemon may keep serving its stale copy"
+  }
+} else {
+  Write-Step "Removing stale global npm install (if any)"
+  if (Invoke-Tolerant { & npm ls -g 9router 2>&1 | Out-Null }) {
+    $purged = Invoke-Tolerant { & npm uninstall -g 9router 2>&1 | Out-Null }
+    if ($purged) { Write-Okay "Global 9router removed" }
+    else {
+      Write-Warn2 "Global removal blocked (EBUSY) -- retrying once after a stop sweep"
+      Stop-All9Router | Out-Null
+      $purged = Invoke-Tolerant { & npm uninstall -g 9router 2>&1 | Out-Null }
+      if ($purged) { Write-Okay "Global 9router removed on retry" }
+      else { Write-Warn2 "Global copy remains; user-dir install proceeds and wins PATH (newest entry)" }
+    }
+  } else { Write-Okay "No global install to purge" }
+}
 Get-ChildItem (Join-Path $env:USERPROFILE "AppData\Local\nvm") -Recurse -Directory -Filter ".9router-*" -ErrorAction SilentlyContinue |
   ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
 
 # Stale shims from a partially-uninstalled global can sit in the npm prefix
 # root (e.g. the nvm4w nodejs dir) and, living earlier in PATH order, shadow
-# the user-dir shim in every new terminal.
-Write-Step "Cleaning stale global bin shims (if any)"
-$npmPrefix = (& npm config get prefix | Select-Object -First 1)
-if ($npmPrefix) { $npmPrefix = $npmPrefix.Trim() }
-if ($npmPrefix -and ($npmPrefix -ne $InstallDir)) {
-  Get-ChildItem -LiteralPath $npmPrefix -Filter "9router*" -ErrorAction SilentlyContinue |
-    ForEach-Object {
-      Write-Warn2 "Removing stale shim $($_.FullName)"
-      Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
-    }
+# the user-dir shim in every new terminal. On a successful acs-managed prefix
+# upgrade the prefix shims are VALID (they point at the fork) - keep them.
+if ($acs -and $prefixOk) {
+  Write-Step "Cleaning stale global bin shims (if any)"
+  Write-Okay "Prefix shims kept (npm-prefix now carries the fork)"
+} else {
+  Write-Step "Cleaning stale global bin shims (if any)"
+  $npmPrefix = (& npm config get prefix | Select-Object -First 1)
+  if ($npmPrefix) { $npmPrefix = $npmPrefix.Trim() }
+  if ($npmPrefix -and ($npmPrefix -ne $InstallDir)) {
+    Get-ChildItem -LiteralPath $npmPrefix -Filter "9router*" -ErrorAction SilentlyContinue |
+      ForEach-Object {
+        Write-Warn2 "Removing stale shim $($_.FullName)"
+        Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+      }
+  }
+  Write-Okay "Shim cleanup done"
 }
-Write-Okay "Shim cleanup done"
 
 # 6. Install into the user dir -------------------------------------------
 #    npm --global --prefix <dir> puts the package in <dir>\node_modules\9router
@@ -266,6 +300,23 @@ function Wait-Healthy {
   return $false
 }
 
+# Fully windowless spawn: CreateNoWindow + UseShellExecute=false means no
+# console is allocated at all - Start-Process -WindowStyle Hidden would
+# still flash one briefly on some shells.
+function Start-InstalledCliWindowless {
+  param([string]$CliPath, [int]$ServerPort)
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = (Get-Command node).Source
+  $psi.Arguments = "`"$CliPath`" --tray --skip-update -p $ServerPort"
+  $psi.CreateNoWindow = $true
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  [System.Diagnostics.Process]::Start($psi) | Out-Null
+}
+
+# Live-version gate: the acs daemon may resurrect ITS stale managed copy even
+# though health returns 200 (/api/version would then disagree with the install).
 if (-not $NoStart) {
   Write-Step "Starting 9Router on port $Port (watchdog restored)"
   $cli = Join-Path $InstallDir "node_modules\9router\cli.js"
@@ -278,21 +329,23 @@ if (-not $NoStart) {
     $spawnedManually = $false
   } elseif ($spawnedManually) {
     Write-Warn2 "Service not healthy yet - spawning manually (fully silent, no terminal window)"
-    # Fully windowless spawn: CreateNoWindow + UseShellExecute=false means no
-    # console is allocated at all - Start-Process -WindowStyle Hidden would
-    # still flash one briefly on some shells.
-    $nodeExe = (Get-Command node).Source
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $nodeExe
-    $psi.Arguments = "`"$cli`" --tray --skip-update -p $Port"
-    $psi.CreateNoWindow = $true
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    [System.Diagnostics.Process]::Start($psi) | Out-Null
+    Start-InstalledCliWindowless -CliPath $cli -ServerPort $Port
   }
   if (Wait-Healthy) {
-    Write-Okay "Server is healthy at $ServerUrl"
+    try {
+      $liveVersion = (Invoke-RestMethod -Uri "$ServerUrl/api/version" -UseBasicParsing -TimeoutSec 5).currentVersion
+      if ($liveVersion -eq $installed) { Write-Okay "Live server reports v$liveVersion" }
+      else {
+        Write-Warn2 "Live server reports v$liveVersion, not the installed v$installed (supervisor resurrected a stale copy)"
+        Write-Warn2 "Killing stale instances and spawning the installed CLI windowlessly"
+        Stop-All9Router | Out-Null
+        Start-Sleep -Seconds 2
+        Start-InstalledCliWindowless -CliPath $cli -ServerPort $Port
+        if (Wait-Healthy) {
+          Write-Okay "Installed fork now serving at $ServerUrl"
+        } else { Write-Warn2 "Still not healthy - check: node `"$cli`" --tray --skip-update -p $Port" }
+      }
+    } catch { Write-Warn2 "Could not verify live version: $($_.Exception.Message)" }
     Write-Host ""
     Write-Host "  Dashboard: $ServerUrl/dashboard" -ForegroundColor White
     Write-Host "  Gateway:   $ServerUrl/v1" -ForegroundColor White

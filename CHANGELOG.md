@@ -1,3 +1,14 @@
+# v0.5.109-andyvandaric-patch (2026-10-18, fork)
+
+## Fixes (fork: install stays fully background and keeps the fork serving)
+- **install.ps1 — no downgrade loop on acs-managed boxes**: the acs daemon supervises `<npm-prefix>\node_modules\9router` and self-heals a missing copy with an opaque global `npm i -g 9router`, which pulls the official upstream `0.5.104` from npmjs. The installer used to purge that global copy, so on any acs-managed box the freshly installed fork immediately lost the serving path to the daemon's repair-install. The purge branch now only runs on standalone boxes; on acs-managed boxes the installer upgrades the daemon-supervised prefix copy to the fork tarball instead (retry with a full stop sweep when EBUSY) and keeps the valid prefix shims.
+- **install.ps1 — live-version gate**: a healthy 200 on `/api/health` can still come from a stale supervisor-resurrected copy (root cause of the "installer says 108, dashboard says 104" mismatch). The final step now reads `/api/version`: if `currentVersion` differs from the installed version, stale instances are killed and the installed user-dir CLI is spawned windowlessly again, then health-checked.
+- **No more console flashes**: the tray open-browser call (`cli/src/cli/tray/tray.js`) ran a bare `exec(cmd)` and the updater's post-install dashboard open (`src/lib/updater/updater.js`) shelled `start ""` without `windowsHide` — both allocated a visible cmd window before opening the browser. Both are now `windowsHide: true` (installer's own spawns were already `CreateNoWindow`).
+
+## Verification
+- **Live root cause, reproduced twice**: purge of the nvm global was followed within a ~85 s daemon-respawn window by the tray running again from `<npm-prefix>\node_modules\9router` with `/api/version` back at `0.5.104` — confirming the self-heal reinstall; upgrading the prefix copy directly (`changed 11 packages`) and restarting the supervised tray puts `/api/version` at the fork version (`0.5.108` verified live, `acs router status` Version 0.5.108, health ok).
+- **Syntax**: `install.ps1` parses clean (PowerShell AST, 0 errors); modified `tray.js` and `updater.js` pass `node --check`.
+
 # v0.5.108-andyvandaric-patch (2026-10-17, fork)
 
 ## Fixes (fork: adopt the upstream OpenCode fingerprint mechanism in full)

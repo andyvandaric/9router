@@ -316,8 +316,8 @@ function openBrowser(url) {
     cmd = `xdg-open "${url}"`;
   }
 
-  exec(cmd);
-}
+  // windowsHide: `exit`-style shell commands must never flash a console window
+  exec(cmd, { windowsHide: true }, () => { /* fire-and-forget */ });}
 
 module.exports = {
   initTray,
