@@ -31,6 +31,9 @@ vi.mock("../../open-sse/executors/index.js", () => ({
 
 vi.mock("../../open-sse/translator/index.js", () => ({
   translateRequest: translateRequestMock,
+  // response/openai-to-claude.js self-registers via register() at import time;
+  // post-merge the chatCore graph pulls it in through concerns/claudeMessage.js.
+  register: vi.fn(),
 }));
 
 vi.mock("../../open-sse/handlers/chatCore/nonStreamingHandler.js", () => ({

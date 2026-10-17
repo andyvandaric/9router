@@ -39,9 +39,12 @@ describe("provider baseUrl const (full path, no trailing slash)", () => {
   });
 });
 
-describe("antigravity retry (intentional change: 429=6, 503=3)", () => {
-  it("429 attempts = 6", () => {
-    expect(antigravity.transport.retry["429"].attempts).toBe(6);
+describe("antigravity retry (const guard: live defaults)", () => {
+  // Historical note: an older fork patch forced 429=6, but the effective
+  // default at both pre- and post-v0.5.104-merge HEAD is attempts:3.
+  // This guard witnesses the live values so a silent retry-policy change fails fast.
+  it("429 attempts = 3", () => {
+    expect(antigravity.transport.retry["429"].attempts).toBe(3);
   });
   it("503 attempts = 3", () => {
     expect(antigravity.transport.retry["503"].attempts).toBe(3);
@@ -51,12 +54,11 @@ describe("antigravity retry (intentional change: 429=6, 503=3)", () => {
 describe("OpenCode Free endpoint routing", () => {
   const MUSE = "muse-spark-1.2-contributor-free";
 
-  it("declares the Responses format only on the Muse Spark model", () => {
+  it("declares only live free-tier models (dead muse/union pruned, jev kept)", () => {
     expect(opencode.transport.format).toBeUndefined();
-    const muse = opencode.models.find((m) => m.id === MUSE);
-    expect(muse?.targetFormat).toBe("openai-responses");
-    const muse13 = opencode.models.find((m) => m.id === "muse-spark-1.3-contributor-free");
-    expect(muse13?.targetFormat).toBe("openai-responses");
+    expect(opencode.models.find((m) => m.id.startsWith("muse-spark"))).toBeUndefined();
+    expect(opencode.models.find((m) => m.id === "union-alpha")).toBeUndefined();
+    expect(opencode.models.some((m) => m.id === "jev-1.13-free")).toBe(true);
   });
 
   it("routes Muse Spark to /responses and every other model to /chat/completions", () => {
