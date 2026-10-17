@@ -11,6 +11,9 @@ import {
 } from "../translator/formats/responsesApi.js";
 
 const SESSION_HEADER = "x-opencode-session";
+// Mirrors the v2 CLI wire contract (see opencode.js): every request carries the
+// session id under both header names, not just x-opencode-session.
+const SESSION_ID_HEADER = "x-opencode-session-id";
 const SESSION_FIELD = "_opencodeGoSession";
 const MAX_SESSION_LENGTH = 256;
 
@@ -147,11 +150,13 @@ export class OpenCodeGoExecutor extends DefaultExecutor {
     const prepared = credentials?.[SESSION_FIELD];
     if (prepared) {
       headers[SESSION_HEADER] = prepared;
+      headers[SESSION_ID_HEADER] = prepared;
       return headers;
     }
 
     const fallback = this.prepareRequestCredentials({ credentials });
     headers[SESSION_HEADER] = fallback[SESSION_FIELD];
+    headers[SESSION_ID_HEADER] = fallback[SESSION_FIELD];
     return headers;
   }
 

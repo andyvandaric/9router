@@ -58,6 +58,19 @@ describe("isOpencodeFreeTierModel", () => {
   });
 });
 
+describe("OpenCode Zen session header contract", () => {
+  it("mirrors x-opencode-session into x-opencode-session-id (header parity with the free executor)", () => {
+    const headers = headersFor("big-pickle");
+
+    expect(headers["x-opencode-session"]).toMatch(OPENCODE_SESSION_RE);
+    expect(headers["x-opencode-session-id"]).toBe(headers["x-opencode-session"]);
+
+    const fallbackHeaders = headersFor("big-pickle", { providerSessionId: null });
+    expect(fallbackHeaders["x-opencode-session"]).toMatch(OPENCODE_SESSION_RE);
+    expect(fallbackHeaders["x-opencode-session-id"]).toBe(fallbackHeaders["x-opencode-session"]);
+  });
+});
+
 describe("OpenCodeZenExecutor free-tier auth", () => {
   it("sends Bearer public + session + request ids for free-tier models", () => {
     const headers = headersFor("mimo-v2.6-flash-free");

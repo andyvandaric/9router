@@ -10,6 +10,9 @@ import {
 } from "../translator/formats/responsesApi.js";
 
 const SESSION_HEADER = "x-opencode-session";
+// Wire-contract parity with the free executor (opencode.js): the session id is
+// expected under both header names on every request.
+const SESSION_ID_HEADER = "x-opencode-session-id";
 const SESSION_FIELD = "_opencodeZenSession";
 const MAX_SESSION_LENGTH = 256;
 
@@ -278,9 +281,11 @@ export class OpenCodeZenExecutor extends DefaultExecutor {
     const prepared = credentials?.[SESSION_FIELD];
     if (prepared) {
       headers[SESSION_HEADER] = prepared;
+      headers[SESSION_ID_HEADER] = prepared;
     } else {
       const fallback = this.prepareRequestCredentials({ credentials });
       headers[SESSION_HEADER] = fallback[SESSION_FIELD];
+      headers[SESSION_ID_HEADER] = fallback[SESSION_FIELD];
     }
     if (isOpencodeFreeTierModel(model)) {
       // Free-tier models are gated behind the attested free-tier identity even

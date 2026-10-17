@@ -101,6 +101,27 @@ describe("OpenCode Go x-opencode-session", () => {
     expect(a).not.toBe(b);
   });
 
+  it("mirrors the session into x-opencode-session-id for header contract parity", () => {
+    const executor = getExecutor("opencode-go");
+    const { prepared, credentials } = prepare(executor);
+    const headers = executor.buildHeaders(prepared, true);
+
+    expect(headers["x-opencode-session"]).toMatch(/^ses_[0-9a-f]{32}$/);
+    expect(headers["x-opencode-session-id"]).toBe(headers["x-opencode-session"]);
+    // The mirrored id survives the fallback branch with no native session too.
+    const fallbackHeaders = executor.buildHeaders(
+      executor.prepareRequestCredentials({
+        body: { messages: [{ role: "user", content: "hi" }] },
+        credentials: makeCredentials({ connectionId: "fallback-conn" }),
+        providerSessionId: null,
+        clientTool: null,
+      }),
+      true,
+    );
+    expect(fallbackHeaders["x-opencode-session-id"]).toBe(fallbackHeaders["x-opencode-session"]);
+    expect(credentials).not.toHaveProperty("_opencodeGoSession");
+  });
+
   it("isolates different downstream agents that reuse the same raw id", () => {
     const executor = getExecutor("opencode-go");
     const claude = prepare(executor, { clientTool: "claude" }).prepared._opencodeGoSession;
