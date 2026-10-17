@@ -1,3 +1,11 @@
+# v0.5.104-andyvandaric-patch (2026-10-17, fork)
+
+## Fixes (fork: upstream sync + OpenCode free-tier resilience)
+- **Merge**: integrate upstream v0.5.104 (38 commits: Nous Research provider, Gemini 4 Argon, Codex gpt-5.5 retirement, quota auto-ping schedules, usage fixes). Fork custom README/CHANGELOG preserved; `openAICompletionToClaudeMessage` deduplicated into `translator/concerns/claudeMessage.js` with fork's `normalizeClaudeToolInput` kept.
+- **OpenCode free registry**: sync model list with the live tier (verified via `GET /inference/v1/models` 2026-10-17) — removed `muse-spark-1.2/1.3-contributor-free` and `union-alpha`; chat models (`glm-5.3-flash-free`, deepseek/nemotron/longcat/mimo/beam/space-bunny/big-pickle) stream via passthrough; `jev-1.13-free` kept on systemone.
+- **OpenCode**: rotated stable free-tier sessions — a persistent `429 Upstream request failed: Endpoint is unavailable` now evicts the identity-bound `stableSessionId` and retries once with a fresh session (caller-native/derived sessions pass through untouched). Live probes: poisoned stable session → 429, any fresh session → 200.
+- **Tests**: `opencode-session-rotation` (new); `cline-free-tier-models` pricing reconciled with upstream published contributor rate.
+
 # v0.5.99-andyvandaric-patch (2026-10-15, fork)
 
 ## Fixes (fork: OpenCode free-tier restoration)
