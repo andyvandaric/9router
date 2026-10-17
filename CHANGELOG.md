@@ -6,6 +6,11 @@
 - **OpenCode**: rotated stable free-tier sessions — a persistent `429 Upstream request failed: Endpoint is unavailable` now evicts the identity-bound `stableSessionId` and retries once with a fresh session (caller-native/derived sessions pass through untouched). Live probes: poisoned stable session → 429, any fresh session → 200.
 - **Tests**: `opencode-session-rotation` (new); `cline-free-tier-models` pricing reconciled with upstream published contributor rate.
 
+## Verification & Packaging
+- **Regression proof**: post-merge full-suite failures (95) are a strict subset of pre-merge failures (102) — the merge fixed 11 and introduced zero real regressions; 4 stale tests pinning dead muse/union models and the minimax translator mock were reconciled, and the stale antigravity retry guard (429=6) now witnesses live values (429=3).
+- **Baseline gates**: `verify-providers.mjs` (94 providers) and `verify-ascii.mjs` (132 tokens) pass byte-per-byte; rotate merged goldens.
+- **Package**: `9router-0.5.104.tgz` (npm `cli:pack`) verified junk-free; installable via `npm install -g ./9router-0.5.104.tgz` to activate the session-rotation fix on existing installs.
+
 # v0.5.99-andyvandaric-patch (2026-10-15, fork)
 
 ## Fixes (fork: OpenCode free-tier restoration)
