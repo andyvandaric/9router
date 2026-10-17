@@ -16,11 +16,11 @@ const input = [{
 }];
 
 describe("OpenCode Free Muse Spark thinking", () => {
-  it("keeps dead muse/union models out of the live free-tier registry", () => {
-    expect(PROVIDER_MODELS.oc?.some((model) => model.id.startsWith("muse-spark"))).toBe(false);
+  it("declares live muse-1.2 and keeps dead 1.3/union out of the registry", () => {
+    expect(PROVIDER_MODELS.oc?.some((model) => model.id === "muse-spark-1.3-contributor-free")).toBe(false);
     expect(PROVIDER_MODELS.oc?.some((model) => model.id === "union-alpha")).toBe(false);
     // Capabilities stay available so re-listed muse models get auto-adopted.
-    for (const m of [MODEL, "muse-spark-1.3-contributor-free", "muse-spark-1.4-contributor-free", "muse-spark-2.0-contributor-free"]) {
+    for (const m of [MODEL, "muse-spark-1.4-contributor-free", "muse-spark-2.0-contributor-free"]) {
       expect(getCapabilitiesForModel(PROVIDER, m)).toMatchObject({
         reasoning: true,
         thinkingFormat: "openai",

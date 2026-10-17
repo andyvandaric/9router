@@ -54,9 +54,13 @@ describe("antigravity retry (const guard: live defaults)", () => {
 describe("OpenCode Free endpoint routing", () => {
   const MUSE = "muse-spark-1.2-contributor-free";
 
-  it("declares only live free-tier models (dead muse/union pruned, jev kept)", () => {
+  it("declares only the live muse-1.2 Responses model (dead 1.3/union pruned)", () => {
     expect(opencode.transport.format).toBeUndefined();
-    expect(opencode.models.find((m) => m.id.startsWith("muse-spark"))).toBeUndefined();
+    // Live check 2026-10-17: muse 1.2 still serves inference (dashboard ping 200);
+    // 1.3 is 410 ModelDeprecated upstream and union-alpha left the free tier.
+    const muse = opencode.models.find((m) => m.id === MUSE);
+    expect(muse?.targetFormat).toBe("openai-responses");
+    expect(opencode.models.find((m) => m.id === "muse-spark-1.3-contributor-free")).toBeUndefined();
     expect(opencode.models.find((m) => m.id === "union-alpha")).toBeUndefined();
     expect(opencode.models.some((m) => m.id === "jev-1.13-free")).toBe(true);
   });
