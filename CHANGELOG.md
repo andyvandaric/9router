@@ -1,5 +1,9 @@
 # v0.5.105-andyvandaric-patch (2026-10-17, fork)
 
+## Installers (fork: one-command per-user installer)
+- **install.ps1 / install.sh**: unified Windows + Linux/macOS installer replacing the flaky `npm install -g` one-liner (the Windows `npm error EBUSY: resource busy or locked, rename` failure). Flow: download tarball first -> acs-aware graceful stop (`acs service stop 9router --force`, falls back to process scan + port kill for non-acs machines), ACS Watchdog scheduled task paused during the upgrade window and guaranteed re-enabled at the end -> stale global purge + stale shim cleanup (nvm prefix root) -> per-user install into `~/.9router/cli` (no admin, immune to locked global dirs) -> PATH wiring -> silent background start (ProcessStartInfo `CreateNoWindow` / `nohup`, zero terminal flash) -> `/api/health` verification. Version pinning via `-Version X.Y.Z` / `--version X.Y.Z`; `-NoStart` / `--no-start` supported. Data in `~/.9router` untouched.
+- **README**: Quick Start + ACS tip block rewritten around the installer one-liners; legacy npm/npx paths demoted to fallback with EBUSY warning.
+
 ## Fixes (fork: OpenCode free-tier registry truth + release automation)
 - **OpenCode registry**: restore `muse-spark-1.2-contributor-free` — dashboard live probe returns HTTP 200 while the `/models` listing omits it; only `muse-spark-1.3-contributor-free` is deprecated upstream (410 `ModelDeprecated`). `union-alpha` stays out of the registry (removed from the free tier).
 - **CI (docker-publish)**: fork-patch tags (`vX.Y.Z-andyvandaric-patch`) now validate against their base semver instead of failing the tag↔package.json equality check.

@@ -1,19 +1,34 @@
 > [!TIP]
-> ### 📦 Panduan Instalasi Cepat untuk Pengguna [ACS (Agnostic Config Suites)](https://uikode.com/acs/)
-> Untuk mendapatkan seluruh stabilitas patch produksi ini secara instan, bersih, dan tanpa perlu compile Next.js lokal, gunakan release tarball prebuilt resmi di bawah ini:
+> ### ?? Panduan Instalasi Cepat untuk Pengguna [ACS (Agnostic Config Suites)](https://uikode.com/acs/)
+> Untuk mendapatkan seluruh stabilitas patch produksi ini secara instan, bersih, dan tanpa perlu compile Next.js lokal, gunakan **installer resmi** di bawah ini — bukan `npm install -g` versi lama.
 >
-> 
-> **Opsi 1: Instalasi Global Paket Prebuilt (Direkomendasikan — Bersih, Cepat, Zero-Build)**
-> ```bash
-> npm install -g https://github.com/andyvandaric/9router/releases/latest/download/9router-latest.tgz
+> **Installer One-Liner (Direkomendasikan — auto stop service, install per-user tanpa admin, auto start)**
+>
+> Windows (PowerShell):
+> ```powershell
+> irm https://raw.githubusercontent.com/andyvandaric/9router/master/install.ps1 -OutFile 9router-install.ps1
+> powershell -ExecutionPolicy Bypass -File 9router-install.ps1
 > ```
-> **Opsi 2: Jalankan Langsung via npx**
+>
+> Linux / macOS:
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/andyvandaric/9router/master/install.sh | bash
+> ```
+>
+> Dalam bahasa Indonesia: installer ini otomatis:
+> 1. **Menghentikan service 9router yang sedang berjalan** — via `acs service stop 9router` bila `acs` tersedia, dengan fallback scan proses + bebas port untuk install non-ACS.
+> 2. **Mengunduh tarball prebuilt** (`9router-latest.tgz`, atau pin versi: `-Version X.Y.Z` / `--version X.Y.Z`).
+> 3. **Menginstall ke direktori per-user** `~/.9router/cli` — tanpa admin, dan bebas dari error `EBUSY: resource busy or locked, rename` yang menimpa install global di dalam folder nvm/lainnya yang terkunci.
+> 4. **Menambahkan CLI ke PATH** lalu **menyalakan ulang service** (acs-first, fallback manual) dan memverifikasi `/api/health`.
+> 5. Data/DB Anda di `~/.9router` **tidak diganggu sama sekali**.
+>
+> **Pengguna Dashboard ACS**
+> *Setelah instalasi selesai, cukup jalankan `acs service start 9router` atau cukup klik Start pada Service 9router di dashboard ACS (otomatis termanage).*
+>
+> **Opsi legacy (tidak direkomendasikan di Windows — rawan `npm error EBUSY, rename` jika service masih berjalan):**
 > ```bash
 > npx https://github.com/andyvandaric/9router/releases/latest/download/9router-latest.tgz
 > ```
-> **Pengguna Dashboard ACS**
-> 
-> *Setelah instalasi selesai, cukup jalankan `acs service start 9router` atau Cukup klik Start pada Service 9router di dashboard ACS (otomatis termanage).
 
 ---
 
@@ -126,10 +141,26 @@ Result: Never stop coding, minimal cost + 20-40% token savings via RTK
 
 ## ⚡ Quick Start
 
-**1. Install globally:**
+**1. Install (per-user, auto stop/start service):**
 
+Windows (PowerShell):
+```powershell
+irm https://raw.githubusercontent.com/andyvandaric/9router/master/install.ps1 -OutFile 9router-install.ps1
+powershell -ExecutionPolicy Bypass -File 9router-install.ps1
+```
+
+Linux / macOS:
 ```bash
-npm install -g 9router
+curl -fsSL https://raw.githubusercontent.com/andyvandaric/9router/master/install.sh | bash
+# pin versi tertentu:
+# curl -fsSL https://raw.githubusercontent.com/andyvandaric/9router/master/install.sh | bash -s -- --version 0.5.104
+```
+
+Installer ini menghentikan service yang sedang berjalan (via `acs service stop/start 9router` bila ada, fallback proses/OS), menginstall CLI ke `~/.9router/cli` (tanpa admin, anti-`EBUSY`), lalu menyalakan ulang server dan menunggu `/api/health` hijau. Data Anda di `~/.9router` tetap aman.
+
+Alternatif manual (tidak direkomendasikan di Windows):
+```bash
+npm install -g https://github.com/andyvandaric/9router/releases/latest/download/9router-latest.tgz
 9router
 ```
 
