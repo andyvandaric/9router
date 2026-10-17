@@ -80,6 +80,11 @@ jobs:
       - name: Install root dependencies
         run: npm install --no-audit --no-fund
 
+      - name: Install CLI dependencies
+        # buildMitm.js requires esbuild from cli/node_modules (untracked — lockfile
+        # is gitignored), so the CLI deps must be installed explicitly.
+        run: npm install --prefix cli --no-audit --no-fund
+
       - name: Build CLI package tarball
         run: npm run cli:pack
 
