@@ -65,7 +65,34 @@ fi
 
 # 3. Download FIRST (before stopping) to minimize service downtime ---------
 TMPDIR_="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR_"' EXIT
+STOPPED=0
+INSTALL_DONE=0
+
+# Restore-on-failure -------------------------------------------------------
+# The upgrade window stops the service, so a failure in between (a failed npm
+# install is the real-world case) must not leave the stack down. This runs on
+# every exit path, including the `set -e` aborts.
+restore_state() {
+  rm -rf "$TMPDIR_"
+  [ "$STOPPED" -eq 1 ] || return 0
+  [ "$INSTALL_DONE" -eq 1 ] && return 0
+  curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1 && return 0
+  warn "install window left the service stopped - restoring it"
+  if [ -n "${ACS_BIN:-}" ] && "$ACS_BIN" service start 9router --force >/dev/null 2>&1; then
+    :
+  elif [ -n "${CLI_JS:-}" ] && [ -e "${CLI_JS:-}" ]; then
+    nohup node "$CLI_JS" --tray --skip-update -p "$PORT" >/dev/null 2>&1 &
+  fi
+  for _ in $(seq 1 10); do
+    sleep 0.5
+    if curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; then
+      okay "service healthy again on port ${PORT}"
+      return 0
+    fi
+  done
+  warn "could not confirm health after restore; start manually: nohup node \"${CLI_JS:-<cli.js>}\" --tray --skip-update -p ${PORT} >/dev/null 2>&1 &"
+}
+trap restore_state EXIT
 TGZ="${TMPDIR_}/9router.tgz"
 say "Downloading ${DOWNLOAD_URL}"
 curl -fSL --retry 3 -o "$TGZ" "$DOWNLOAD_URL"
@@ -109,6 +136,7 @@ if [ "$STOP_CLEAN" -ne 1 ]; then
 else
   okay "nothing is holding port ${PORT} now"
 fi
+STOPPED=1
 sleep 1
 
 # 5. Purge the stale global install (prevents PATH shadowing) ---------------
@@ -139,8 +167,14 @@ okay "Shim cleanup done"
 #    no file in it can be locked by a managed global dir again.
 say "Installing into ${HOME}/.9router/cli"
 if ! npm install --global --prefix "${HOME}/.9router/cli" "$TGZ" >/dev/null 2>&1; then
-  npm install --global --prefix "${HOME}/.9router/cli" "$TGZ"  # rerun to surface the error
-  exit 1
+  # npm can die with an empty log and a non-zero exit when a supervisor window
+  # races the install (observed on Windows), so retry once before giving up.
+  warn "npm install failed - retrying once"
+  sleep 2
+  if ! npm install --global --prefix "${HOME}/.9router/cli" "$TGZ" >/dev/null 2>&1; then
+    npm install --global --prefix "${HOME}/.9router/cli" "$TGZ"  # rerun to surface the error
+    exit 1
+  fi
 fi
 SHIM="${HOME}/.9router/cli/bin/9router"
 [ -e "$SHIM" ] || { echo "Install finished but ${SHIM} was not created" >&2; exit 1; }
@@ -177,6 +211,7 @@ fi
 # 9. Start the service (fully silent, no terminal) ----------------------------
 if [ "$NO_START" -eq 1 ]; then
   say "-no-start given; start later with: nohup node \"${CLI_JS}\" --tray --skip-update -p ${PORT} >/dev/null 2>&1 &"
+  INSTALL_DONE=1
 else
   say "Starting 9Router on port ${PORT}"
   STARTED_VIA_ACS=0
@@ -204,6 +239,7 @@ else
   fi
   if wait_health; then
     okay "Server is healthy at ${SERVER_URL}"
+    INSTALL_DONE=1
     printf '\n  Dashboard: %s/dashboard\n  Gateway:   %s/v1\n  Data dir:  %s/.9router (untouched by this install)\n' \
       "$SERVER_URL" "$SERVER_URL" "$HOME"
   else

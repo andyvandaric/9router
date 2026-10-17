@@ -1,3 +1,13 @@
+# v0.5.107-andyvandaric-patch (2026-10-17, fork)
+
+## Fixes (fork: installer resilience)
+- **install.ps1 / install.sh**: an upgrade that aborted inside the install window (a failed `npm install`) used to leave the stack exactly as that window had left it - service stopped and the ACS Watchdog still paused/disabled - because both restorations only ran at the end of the happy path. State is now restored on every exit path: `install.ps1` via a scope `trap`, `install.sh` via its EXIT trap (which previously only cleaned the temp dir). The watchdog is always re-enabled, and when the service was stopped for the window it is started again (acs first, then the previously installed CLI - windowless spawn / `nohup` - with a health check), and the script still exits non-zero so a failed upgrade is never mistaken for a success.
+- **install.ps1 / install.sh**: retry the `npm install` once before failing. Windows npm can die with an empty log and exit 1 when a supervisor window races the install (observed live: the tarball download, service stop and watchdog pause all succeeded, then npm exited 1 with a zero-byte log), and a single retry recovers it.
+
+## Verification
+- **Fault injection**: `install.ps1` copy with the npm step forced to fail (`cmd /c exit 1`) -> both attempts fail, `Install FAILED (previous state restored)` printed, exit code 1, and the post-run state was verified healthy: watchdog `Ready`, `9router` listening on 20128, `/api/health` -> `{"ok":true}`.
+- **Syntax**: `install.ps1` parses clean (PowerShell AST, 0 errors); `install.sh` passes `bash -n`.
+
 # v0.5.106-andyvandaric-patch (2026-10-17, fork)
 
 ## Fixes (fork: OpenCode free-tier request truth)

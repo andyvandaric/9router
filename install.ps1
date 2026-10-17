@@ -49,6 +49,61 @@ function Invoke-Tolerant([scriptblock]$sb) {
   return ($LASTEXITCODE -eq 0)
 }
 
+# Restore-on-failure ------------------------------------------------------
+# The upgrade window stops the service and pauses the ACS Watchdog. A
+# terminating error in between (a failed npm install is the real-world case)
+# used to leave both that way, i.e. the whole stack down with the watchdog
+# still disabled. Every failure path now funnels through the trap below.
+$script:didStop = $false
+
+function Restore-PreviousState {
+  $wd = Get-ScheduledTask -TaskName $WatchdogTaskPattern -ErrorAction SilentlyContinue
+  if ($wd -and $wd.State -eq "Disabled") {
+    Enable-ScheduledTask -TaskName $WatchdogTaskPattern -ErrorAction SilentlyContinue | Out-Null
+    Write-Okay "Watchdog re-enabled"
+  }
+  if (-not $script:didStop) { return }
+  try {
+    $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($listener) { Write-Okay "Server still listening on port $Port"; return }
+  } catch { }
+  Write-Warn2 "Install window left the service stopped - restoring it"
+  if ($acs) { Invoke-Tolerant { & acs service start 9router --force 2>&1 | Out-Null } | Out-Null }
+  for ($i = 0; $i -lt 20; $i++) {
+    Start-Sleep -Milliseconds 500
+    try {
+      if ((Invoke-WebRequest -Uri "$ServerUrl/api/health" -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200) {
+        Write-Okay "Server is healthy at $ServerUrl"
+        return
+      }
+    } catch { }
+  }
+  # Last resort: the previously installed CLI is still on disk even when the new
+  # package is half-written, so bring that one up windowlessly.
+  $prevCli = Join-Path $InstallDir "node_modules\9router\cli.js"
+  if (Test-Path $prevCli) {
+    Write-Warn2 "acs start did not converge - spawning the previous CLI directly"
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = (Get-Command node).Source
+    $psi.Arguments = "`"$prevCli`" --tray --skip-update -p $Port"
+    $psi.CreateNoWindow = $true
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    [System.Diagnostics.Process]::Start($psi) | Out-Null
+  } else {
+    Write-Warn2 "No previous CLI at $prevCli - stack left stopped, start it manually"
+  }
+}
+
+trap {
+  Write-Warn2 "Install failed: $($_.Exception.Message)"
+  Restore-PreviousState
+  Write-Host ""
+  Write-Host "Install FAILED (previous state restored)." -ForegroundColor Red
+  exit 1
+}
+
 # 1. Preflight ------------------------------------------------------------
 Write-Step "Preflight checks"
 foreach ($cmd in @("node", "npm")) {
@@ -122,6 +177,7 @@ for ($round = 1; $round -le 5; $round++) {
 }
 if ($stopped) { Write-Okay "Nothing is running and port $Port is free" }
 else { Write-Warn2 "Processes kept reappearing -- continuing anyway (install is user-dir, unaffected)" }
+$script:didStop = $true
 
 # 5. Purge the stale global install (prevents PATH shadowing) -------------
 # Best-effort only: a locked nvm global dir must never block the user-dir
@@ -162,9 +218,18 @@ Write-Okay "Shim cleanup done"
 #    no file in it can be locked by an nvm-managed global dir again.
 Write-Step "Installing into $InstallDir"
 $npmLog = Join-Path $tmp.FullName "npm-install.log"
-if (-not (Invoke-Tolerant { & npm install --global --prefix $InstallDir $tgz *> $npmLog })) {
+$installedOk = Invoke-Tolerant { & npm install --global --prefix $InstallDir $tgz *> $npmLog }
+if (-not $installedOk) {
+  # npm can die with an empty log and exit 1 when a supervisor window races the
+  # install (observed on Windows), so retry once before giving up.
   Write-Warn2 "npm install failed - last log lines:"
-  Get-Content $npmLog -Tail 15 | ForEach-Object { Write-Warn2 $_ }
+  Get-Content $npmLog -Tail 15 -ErrorAction SilentlyContinue | ForEach-Object { Write-Warn2 $_ }
+  Write-Warn2 "Retrying install once"
+  Start-Sleep -Seconds 2
+  $installedOk = Invoke-Tolerant { & npm install --global --prefix $InstallDir $tgz *> $npmLog }
+}
+if (-not $installedOk) {
+  Write-Warn2 "npm install failed after retry (full log: $npmLog)"
   throw "npm install failed (full log: $npmLog)"
 }
 $shim = Join-Path $InstallDir "9router.cmd"
