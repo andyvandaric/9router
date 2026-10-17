@@ -12,9 +12,12 @@ const resultsPath = process.argv[2];
 if (!resultsPath) { console.error("Missing results.json path"); process.exit(2); }
 
 const r = JSON.parse(readFileSync(resultsPath, "utf8"));
+// Path-portable: baselines are written as "tests/<subpath> :: name"; accept both
+// Windows and POSIX separators from the vitest JSON reporter.
+const toTestId = (name) => "tests/" + name.split(/[\/\\]tests[\/\\]/).pop();
 const nowFails = r.testResults.flatMap(f =>
   f.assertionResults.filter(a => a.status === "failed")
-    .map(a => f.name.split("/app/")[1] + " :: " + a.fullName)
+    .map(a => toTestId(f.name) + " :: " + a.fullName)
 );
 
 // Regression = fail bây giờ NHƯNG không có trong baseline known-fails
