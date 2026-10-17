@@ -1,3 +1,14 @@
+# v0.5.106-andyvandaric-patch (2026-10-17, fork)
+
+## Fixes (fork: OpenCode free-tier request truth)
+- **OpenCode (403)**: rotate the identity-bound `stableSessionId` on `403 FreeTierError`, not only on `429`. Upstream replaced the flood-limit body (`429 FreeUsageLimitError`) with `403 FreeTierError` for stale/exhausted stable sessions, so the executor kept replaying a poisoned identity for up to the session TTL (2h). `execute()` now evicts the stable session and retries once on either rejection; caller-native/derived sessions still pass through untouched, and non-gate 403s are surfaced to the client as-is.
+- **OpenCode free GLM (`#4985`)**: `glm-5.3-flash-free` no longer emits the z.ai `thinking` object. The free endpoint is OpenAI-compatible and rejects both `thinking` and `enable_thinking` with `400 [unknown_parameter] invalid request body: json: unknown field "thinking"`, while accepting `reasoning_effort` - yet the model inherited the global `thinkingFormat: zai` entry, so every Claude Code request carrying a thinking setting failed. A `PROVIDER_CAPABILITIES` override now pins it to `thinkingFormat: openai` (the `oc` combo alias is mapped too, and the capability fields the override short-circuits - vision/pdf/context/output - are carried over), mirroring the existing `opencode-go` override for the same model.
+
+## Verification
+- **Wire probes (live, free endpoint)**: `thinking:{enabled}` -> 400, `enable_thinking:true` -> 400, `reasoning_effort` low|high|max -> 200.
+- **End-to-end** (real translator + executor, providers `opencode` and alias `oc`): `thinking` absent, `reasoning_effort:"low"`, fingerprint tools `["Read"]`, upstream **HTTP 200** with a live streamed completion.
+- **Tests**: `opencode-free-thinking-format` (new, 4/4) and `opencode-session-rotation` (7/7) pass; neighbouring unit + translator suites 132 pass, with the single pre-existing `GLM-5.2` failure confirmed present at HEAD via stash baseline.
+
 # v0.5.105-andyvandaric-patch (2026-10-17, fork)
 
 ## Installers (fork: one-command per-user installer)
