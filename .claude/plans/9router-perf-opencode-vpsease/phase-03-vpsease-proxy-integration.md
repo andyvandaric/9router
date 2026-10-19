@@ -3,7 +3,7 @@
 **Document ID:** `PHASE-03-VPSEASE-PROXY-INTEGRATION`  
 **Parent Master Plan:** [`.claude/plans/9router-perf-opencode-vpsease/index.md`](index.md)  
 **Assigned Sub-Agent / Role:** Executor / Network & Security Engineer  
-**Status:** 🟡 PROPOSED  
+**Status:** ✅ COMPLETED  
 **Target Files:**  
 - `scripts/setup-vpsease-proxy.mjs` (Automated helper to configure pool)  
 - `%APPDATA%/9router/db/data.sqlite` (`proxyPools` and `settings` tables)  
