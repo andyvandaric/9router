@@ -74,6 +74,10 @@ async function initAdapter() {
 
   const { runMigrationOnce } = await import("./migrate.js");
   await runMigrationOnce(adapter);
+
+  const { scheduleAutoPrune } = await import("./prune.js");
+  scheduleAutoPrune(adapter);
+
   return adapter;
 }
 

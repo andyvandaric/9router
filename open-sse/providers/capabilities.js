@@ -141,6 +141,20 @@ export const MODEL_CAPABILITIES = {
   "glm-4.5v":          { vision: true, videoInput: true, reasoning: true, thinkingFormat: "zai", contextWindow: 64000, maxOutput: 16384 },
   // GLM-5.2 has 1M context — pattern *glm-5* only gives 200k, so override here
   "glm-5.2":           { reasoning: true, thinkingFormat: "zai", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 131072 },
+  // OpenCode serves the same weights under this free id from its OWN inference
+  // service, which validates the body strictly: the zai `thinking` object the
+  // *glm-5.3* pattern emits is answered
+  //   400 [unknown_parameter] invalid request body: json: unknown field "thinking"
+  // while reasoning_effort is accepted (none/minimal/low/medium/high/xhigh/max → 200).
+  // Probed live 2026-10-18 on both lanes exposing the id: /inference/v1 (provider
+  // "opencode") and /zen/v1 (provider "opencode-zen"). Mirrors the
+  // PROVIDER_CAPABILITIES["opencode-go"] override for the paid glm-5.3-flash id;
+  // the zai shape stays correct for z.ai's own lines (glm / glm-cn). codebuddy-cn
+  // is unaffected — it already resolves glm-5.3-flash to the openai shape.
+  // Known gap, shared with the paid sibling: an intent that carries no level
+  // (Claude adaptive thinking, reasoning_effort "auto") still emits literal
+  // "auto" from the generic openai branch, which this service rejects.
+  "glm-5.3-flash-free": { vision: true, videoInput: true, pdf: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 128000 },
 
   // DeepSeek's first V4 model with image input; text limits match V4-Flash.
   "deepseek-v4-flash-vision-exp": { vision: true, reasoning: true, thinkingFormat: "deepseek", contextWindow: 1000000, maxOutput: 384000 },

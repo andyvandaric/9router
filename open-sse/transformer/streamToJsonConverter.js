@@ -27,8 +27,15 @@ function processSSEMessage(msg, state) {
     state.created = parsed.response?.created_at || state.created;
   } else if (eventType === "response.output_item.done") {
     state.items.set(parsed.output_index ?? 0, parsed.item);
-  } else if (eventType === "response.completed" || eventType === "response.done") {
-    state.status = "completed";
+  } else if (eventType === "response.completed" || eventType === "response.done" || eventType === "response.incomplete") {
+    // response.incomplete (max_output_tokens / content_filter) is terminal too; missing
+    // it left status "in_progress" and zero usage on a cut-short turn.
+    if (eventType === "response.incomplete") {
+      state.status = "incomplete";
+      state.incompleteDetails = parsed.response?.incomplete_details || null;
+    } else {
+      state.status = "completed";
+    }
     if (parsed.response?.usage) {
       state.usage.input_tokens = parsed.response.usage.input_tokens || 0;
       state.usage.output_tokens = parsed.response.usage.output_tokens || 0;
@@ -97,6 +104,7 @@ export async function convertResponsesStreamToJson(stream) {
     object: "response",
     created_at: state.created,
     status: state.status || "completed",
+    ...(state.status === "incomplete" ? { incomplete_details: state.incompleteDetails } : {}),
     output,
     usage: state.usage
   };

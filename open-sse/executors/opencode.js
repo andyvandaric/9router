@@ -341,6 +341,10 @@ function normalizeOpencodeReasoning(model, body) {
   }
 
   body.reasoning = { ...currentReasoning, effort };
+  // Adaptive / budget-less thinking (Claude Code's thinking:{type:"adaptive"})
+  // arrives as "auto", which upstream rejects with 400 "unknown variant `auto`".
+  // Omitting effort lets upstream pick its default, which is what adaptive means.
+  if (effort === "auto") delete body.reasoning.effort;
   if (!body.reasoning.summary) body.reasoning.summary = "auto";
   delete body.reasoning_effort;
 }
