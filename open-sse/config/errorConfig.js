@@ -67,6 +67,12 @@ export const ERROR_RULES = [
   { text: "quota exceeded",           backoff: true },
   { text: "capacity",                 backoff: true },
   { text: "overloaded",               backoff: true },
+  // Client fingerprint rejected — retrying cannot fix identity; fail fast.
+  // Must stay ABOVE the egress rule: when both phrases appear in one body,
+  // the fingerprint (long cooldown, no retry) must win over egress backoff.
+  { text: "can only be used from within opencode", cooldownMs: COOLDOWN.long },
+  // Egress blocked by IP reputation — transient, worth retrying with backoff.
+  { text: "abusive traffic", backoff: true },
 
   // --- Status-based rules (fallback when text doesn't match) ---
   { status: 401, cooldownMs: COOLDOWN.long },
