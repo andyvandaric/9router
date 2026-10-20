@@ -1,5 +1,6 @@
 import { getProviderConnections, validateApiKey, updateProviderConnection, getSettings, getProxyPools } from "@/lib/localDb";
 import { resolveConnectionProxyConfig, pickProxyPoolId } from "@/lib/network/connectionProxy";
+import { probeProxyEgress } from "open-sse/utils/proxyHealth.js";
 import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getEarliestModelLockUntil } from "open-sse/services/accountFallback.js";
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
@@ -10,6 +11,35 @@ import * as log from "../utils/logger.js";
 let selectionMutex = Promise.resolve();
 
 const GITHUB_MONTHLY_USAGE_LIMIT = "you've reached your additional usage limit for your plan";
+
+const EGRESS_PROXY_UNAVAILABLE = "EGRESS_PROXY_UNAVAILABLE";
+
+// A pinned pool is a contract: the request rides it or fails here. Falling
+// through to a proxyless connection would egress from the direct IP — the one
+// upstream flags as abusive, which is what pinning the pool exists to avoid.
+function buildEgressProxyUnavailableError(provider, poolId, reason) {
+  const detail = reason ? ` (${reason})` : "";
+  const error = new Error(
+    `${provider} | configured egress proxy pool "${poolId}" cannot carry this request${detail}. `
+    + "The request was not sent over the direct IP. Repair the proxy tunnel/upstream, "
+    + "or unpin the pool in the Dashboard to allow direct egress.",
+  );
+  error.code = EGRESS_PROXY_UNAVAILABLE;
+  error.poolId = poolId;
+  return error;
+}
+
+// Relay pools rewrite the base URL instead of populating connectionProxyUrl.
+function resolveEgressProxyUrl(resolvedProxy) {
+  return resolvedProxy?.connectionProxyUrl || resolvedProxy?.vercelRelayUrl || "";
+}
+
+// The liveness probe speaks SOCKS5 only. Other schemes are still used as-is;
+// a "malformed" probe would otherwise fail every HTTP proxy pool terminally.
+function isSocksProxyUrl(proxyUrl) {
+  return /^socks5h?:\/\//i.test(proxyUrl);
+}
+
 
 function githubMonthlyResetMs(status, errorText, provider) {
   if (resolveProviderId(provider) !== "github" || Number(status) !== 402) return null;
@@ -65,6 +95,24 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
         return null;
       }
       const resolvedProxy = await resolveConnectionProxyConfig({ proxyPoolId: pickedId || "" });
+
+      // A pinned pool is a contract: probe it before committing the request.
+      // Without this check an unusable pool degrades to a proxyless connection
+      // and the request leaves from the direct IP the upstream blocks.
+      if (pickedId) {
+        const egressProxyUrl = resolveEgressProxyUrl(resolvedProxy);
+        if (!egressProxyUrl) {
+          throw buildEgressProxyUnavailableError(provider, pickedId, "no usable proxy url");
+        }
+        // Relay/HTTP pools are used as-is; the probe speaks SOCKS5 only.
+        if (isSocksProxyUrl(egressProxyUrl)) {
+          const probe = await probeProxyEgress(egressProxyUrl);
+          if (!probe?.ok) {
+            throw buildEgressProxyUnavailableError(provider, pickedId, probe?.reason);
+          }
+        }
+      }
+
       const connectionId = pickedId ? `proxy:${pickedId}` : "noauth";
       const connectionName = pickedId ? (resolvedProxy.proxyPool?.name || `Proxy (${pickedId.slice(0, 8)})`) : "Public";
       return {

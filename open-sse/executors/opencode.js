@@ -7,6 +7,8 @@ import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
 import { isMuseSparkModel } from "../providers/models/helpers.js";
 import { applyFingerprintTools } from "../utils/opencodeFingerprint.js";
+import { FREETIER_KIND, classifyFreeTierRejection, rewriteEgressRejection } from "../utils/freeTierEgress.js";
+import { getQuotaCooldown } from "../services/accountFallback.js";
 import { ANTHROPIC_API_VERSION } from "../providers/shared.js";
 import {
   normalizeResponsesInput,
@@ -25,6 +27,9 @@ const SESSION_HEADER = "x-opencode-session";
 const SESSION_FIELD = "_opencodeSession";
 export const OPENCODE_SESSION_RE = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 const BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+// Bounded retries for an egress-reputation block. More attempts cannot help a
+// flagged address, and each one waits getQuotaCooldown(attempt) milliseconds.
+const MAX_EGRESS_ATTEMPTS = 3;
 
 function hasValidOpencodeVersion(ua) {
   const m = String(ua || "").match(/^opencode\/[a-z0-9-]+\/(\d+)\.\d+\.\d+\/[a-z0-9-]+$/i);
@@ -125,21 +130,28 @@ export function evictStableSession(credentials) {
   stableOpencodeSessions.delete(identityKey(credentials));
 }
 
-// The free-tier gate answers a stale or exhausted session with 403
-// FreeTierError (429 FreeUsageLimitError is the older shape). Only this marker
-// may trigger a rotation — other 403s (auth, permissions) pass through as-is.
-const FREE_TIER_ERROR_MARKER = "FreeTierError";
-
-async function isFreeTierRejection(response) {
-  if (response?.status !== HTTP_STATUS.FORBIDDEN) return false;
-  try {
-    // Inspect a clone so the caller still receives the original body.
-    const text = await response.clone().text();
-    return text.includes(FREE_TIER_ERROR_MARKER);
-  } catch {
-    return false;
-  }
+/**
+ * Wait before the next attempt. Resolves true when the caller aborted during
+ * the wait, so a cancelled request never sits out the full backoff.
+ */
+function sleepUnlessAborted(ms, signal) {
+  if (signal?.aborted) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener?.("abort", onAbort);
+      resolve(false);
+    }, ms);
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+    // An abort between the guard above and the listener attach would otherwise
+    // never fire; re-check so a cancelled request never waits out the backoff.
+    if (signal?.aborted) onAbort();
+  });
 }
+
 const stableSessionCleanup = setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of stableOpencodeSessions) {
@@ -405,19 +417,60 @@ export class OpenCodeExecutor extends BaseExecutor {
   }
 
   async execute(args) {
-    const prepared = this.prepareRequestCredentials(args);
-    const result = await super.execute({ ...args, credentials: prepared });
-    if (prepared._opencodeSessionSource !== SESSION_SOURCE.stable) return result;
-    // Upstream blackholes exactly one stable session while fresh sessions
-    // succeed (live probes 2026-10-17). A 429 keeps rotating as before; the
-    // gate now answers a stale/exhausted session with 403 FreeTierError, which
-    // would otherwise pin the identity for the whole sessionTtlMs window
-    // (2h). Evict and retry once with a regenerated session.
-    const rotates = result?.response?.status === HTTP_STATUS.RATE_LIMITED
-      || await isFreeTierRejection(result?.response);
-    if (!rotates) return result;
-    evictStableSession(prepared);
-    return super.execute({ ...args, credentials: this.prepareRequestCredentials(args) });
+    let prepared = this.prepareRequestCredentials(args);
+    let rotatedForRateLimit = false;
+    let rotatedForFingerprint = false;
+    let egressAttempt = 1;
+
+    for (;;) {
+      const result = await super.execute({ ...args, credentials: prepared });
+      if (prepared._opencodeSessionSource !== SESSION_SOURCE.stable) return result;
+      const response = result?.response;
+
+      // Upstream blackholes exactly one stable session while fresh sessions
+      // succeed (live probes 2026-10-17). A 429 keeps rotating as before: one
+      // eviction, one retry, the second result returned as-is.
+      if (response?.status === HTTP_STATUS.RATE_LIMITED) {
+        if (rotatedForRateLimit) return result;
+        rotatedForRateLimit = true;
+        evictStableSession(prepared);
+        prepared = this.prepareRequestCredentials(args);
+        continue;
+      }
+
+      // The gate answers a stale/exhausted session with the same 403
+      // FreeTierError as a bad client fingerprint (live probes 2026-10-17), so
+      // that variant is ambiguous: rotate the session once, then give up. Only
+      // the egress variant is separately retryable below.
+      const kind = await classifyFreeTierRejection(response);
+      if (kind === FREETIER_KIND.fingerprint) {
+        if (rotatedForFingerprint) return result;
+        rotatedForFingerprint = true;
+        evictStableSession(prepared);
+        prepared = this.prepareRequestCredentials(args);
+        continue;
+      }
+      if (kind !== FREETIER_KIND.egress) return result;
+
+      // A flagged egress address survives session rotation, so retry the same
+      // egress with bounded exponential backoff before surfacing a terminal,
+      // actionable error.
+      if (egressAttempt >= MAX_EGRESS_ATTEMPTS) {
+        return {
+          ...result,
+          response: await rewriteEgressRejection(response, {
+            provider: this.provider,
+            model: args?.model,
+            poolId: args?.proxyOptions?.proxyPoolId || null,
+          }),
+        };
+      }
+
+      evictStableSession(prepared);
+      prepared = this.prepareRequestCredentials(args);
+      if (await sleepUnlessAborted(getQuotaCooldown(egressAttempt), args?.signal)) return result;
+      egressAttempt++;
+    }
   }
 
   // Free tier moved from /zen/v1 to /inference/v1 (OpenCode v2); /zen/v1 now
