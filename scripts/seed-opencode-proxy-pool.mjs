@@ -9,6 +9,16 @@
  * rotate the pinned pool id away across every active pool. This script resolves
  * the database the way the runtime does and pins with rotateStrategy "none".
  *
+ * The pool is seeded with strictProxy:true, so every opencode request must
+ * leave through it. That is deliberate: the upstream free tier blocks flagged
+ * egress addresses, so a request that quietly falls back to the direct IP gets
+ * that IP flagged too. The consequence is fail-closed — if the VPSEase tunnel
+ * (sing-box) is down, opencode requests fail with a terminal error instead of
+ * degrading to the blocked direct IP.
+ *
+ * Escape hatch when the tunnel is down: start VPSEase, or unset the binding
+ * (settings.providerStrategies.opencode) to return opencode to the direct path.
+ *
  * Usage:
  *   node scripts/seed-opencode-proxy-pool.mjs [--force]
  *
@@ -88,6 +98,11 @@ function printUsage() {
       "",
       "Environment:",
       "  DATA_DIR  when set, the runtime database lives at $DATA_DIR/db/data.sqlite",
+      "",
+      "The pool is seeded strictProxy:true, so opencode traffic must leave through",
+      "the VPSEase tunnel. If the tunnel is down, opencode fails terminally instead",
+      "of falling back to the direct IP the upstream blocks. Start VPSEase, or unset",
+      "settings.providerStrategies.opencode, to return to the direct path.",
     ].join("\n"),
   );
 }
