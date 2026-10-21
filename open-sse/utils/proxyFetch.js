@@ -330,13 +330,24 @@ async function createBypassRequest(parsedUrl, realIP, options) {
   });
 }
 
-// OpenCode's free-tier gate answers 403 `FreeTierError` when the request
-// exits from an IP it has flagged — the transport itself succeeded, so the
-// proxy-failure fallback below never sees it and every retry keeps leaving
-// through the same flagged proxy. Live measurement (#4983): identical body and
-// headers in the same minute — flagged pool egress → 403 FreeTierError,
-// direct egress → 200.
+// OpenCode's free-tier gate answers 403 `FreeTierError` for two unrelated
+// reasons, and the transport succeeds in both — so the proxy-failure fallback
+// below never sees it and every retry keeps leaving through the same proxy.
+// Live measurement (#4983): identical body and headers in the same minute —
+// flagged pool egress → 403 FreeTierError, direct egress → 200.
 const FREE_TIER_ERROR_MARKER = "FreeTierError";
+
+// The egress variant of that same 403. The upstream blocks a flagged *address*,
+// so replaying this rejection from a second address only gets that second
+// address flagged by the same gate — and it hands the request to the real IP
+// the proxy was configured to hide. Never replayed.
+const EGRESS_ABUSE_MARKER = "detected abusive traffic from this IP address";
+
+// Where the active proxy came from. The two origins need opposite replay
+// policies: an env proxy is the operator's deliberate egress choice, a
+// configured pool/legacy proxy is ours to work around.
+const PROXY_ORIGIN_CONFIGURED = "configured";
+const PROXY_ORIGIN_ENV = "env";
 
 /** Rebuild a response whose body we buffered while inspecting it. */
 function bufferedResponse(text, original) {
@@ -348,12 +359,32 @@ function bufferedResponse(text, original) {
 }
 
 /**
- * After a proxied attempt, replay once on the direct egress when upstream
- * rejected the *proxy's IP* (403 FreeTierError). A body already consumed by
- * the first attempt cannot be resent, and strictProxy keeps its contract of
- * never leaving over another path — both return the rejection as-is.
+ * True when the 403 body carries the egress-abuse variant of the free-tier
+ * gate — a reputation block on the address that made the request. The upstream
+ * varies the casing, so both sides are compared case-insensitively.
  */
-async function replayFreeTierRejectionDirect(url, options, proxied) {
+function isEgressAbuseRejection(text) {
+  if (typeof text !== "string") return false;
+  return text.toLowerCase().includes(EGRESS_ABUSE_MARKER.toLowerCase());
+}
+
+/**
+ * After a proxied attempt, replay once on the direct egress when upstream
+ * rejected the client *fingerprint* (403 FreeTierError). A body already
+ * consumed by the first attempt cannot be resent, and strictProxy keeps its
+ * contract of never leaving over another path — both return the rejection
+ * as-is.
+ *
+ * The replay is deliberately narrow:
+ *   - the egress-abuse variant is never replayed (replaying a flagged-address
+ *     refusal from a second address just flags that address too);
+ *   - an env-origin proxy is never replayed around (the operator chose that
+ *     egress on purpose).
+ *
+ * @param {string|null} proxyOrigin - where the proxy came from (see
+ *   PROXY_ORIGIN_*); null when the request never left through a proxy.
+ */
+async function replayFreeTierRejectionDirect(url, options, proxied, proxyOrigin) {
   if (proxied.status !== 403) return proxied;
   let text;
   try {
@@ -362,6 +393,14 @@ async function replayFreeTierRejectionDirect(url, options, proxied) {
     return proxied;
   }
   if (!text.includes(FREE_TIER_ERROR_MARKER)) return bufferedResponse(text, proxied);
+  if (isEgressAbuseRejection(text)) {
+    console.warn(`[ProxyFetch] Proxy egress rejected by the OpenCode free-tier gate (403 abusive traffic); not replaying direct: ${targetHost(url)}`);
+    return bufferedResponse(text, proxied);
+  }
+  if (proxyOrigin === PROXY_ORIGIN_ENV) {
+    console.warn(`[ProxyFetch] Proxy from the environment rejected by the OpenCode free-tier gate (403 FreeTierError); not replaying direct: ${targetHost(url)}`);
+    return bufferedResponse(text, proxied);
+  }
   if (options?.body && typeof options.body.getReader === "function" && options.body.locked) {
     return bufferedResponse(text, proxied);
   }
@@ -404,6 +443,12 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
   const connectionProxyUrl = resolveConnectionProxyUrl(targetUrl, proxyOptions);
   const envProxyUrl = connectionProxyUrl ? null : normalizeProxyUrl(getEnvProxyUrl(targetUrl));
   const proxyUrl = connectionProxyUrl || envProxyUrl;
+  // Keep the origin attached: an env proxy is the operator's deliberate egress
+  // choice, a configured pool/legacy proxy is ours to work around. The
+  // direct-egress replay may only ever work around the latter.
+  const proxyOrigin = connectionProxyUrl
+    ? PROXY_ORIGIN_CONFIGURED
+    : (envProxyUrl ? PROXY_ORIGIN_ENV : null);
 
   // MITM DNS bypass: for known MITM-intercepted hosts, resolve real IP to avoid DNS spoof
   if (shouldBypassMitmDns(targetUrl)) {
@@ -434,7 +479,7 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
       const proxied = await fetchWithTlsFallback(url, options, proxyUrl);
       // strictProxy never leaves the configured path — pass the rejection through.
       if (proxyOptions?.strictProxy === true) return proxied;
-      return await replayFreeTierRejectionDirect(url, options, proxied);
+      return await replayFreeTierRejectionDirect(url, options, proxied, proxyOrigin);
     } catch (proxyError) {
       if (proxyError?.code === "ERR_PROXY_DNS_MODE") throw proxyError;
       // If strictProxy is enabled, fail hard instead of falling back to direct
