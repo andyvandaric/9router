@@ -201,6 +201,9 @@ async function main() {
   console.log(`proxyPools rows with id "${POOL_ID}": ${poolsNow.filter((pool) => pool.id === POOL_ID).length}`);
   console.log(`pool proxyUrl: ${seededPool?.proxyUrl || "(missing)"}`);
   console.log(`pool isActive: ${seededPool?.isActive}`);
+  // strictProxy is the security-relevant value: it is what keeps opencode
+  // traffic off the direct IP, so the operator must see it in the output.
+  console.log(`pool strictProxy: ${seededPool?.strictProxy}`);
   console.log(`settings.providerStrategies.${PROVIDER_ID}: ${JSON.stringify(seededStrategy)}`);
   console.log("=== done ===");
   return 0;
