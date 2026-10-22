@@ -55,8 +55,8 @@
 >    - *Problem*: Tabel `usageHistory` & `requestDetails` tumbuh tanpa batas (408+ MB, 200 ribu+ baris di luar window) sehingga dashboard, query agregasi, dan RAM server membalon.
 >    - *Solution*: Auto-prune 30 hari interval 24 jam (`src/lib/db/prune.js`, ter-wiring di `driver.js` setelah migrasi) dengan `usageDaily` tetap dipelihara + VACUUM otomatis, plus script manual `scripts/maintenance/prune-usage.mjs` (backup + pruning + VACUUM + integrity check).
 > 7. **VPSEase Proxy Pool untuk Free Tier OpenCode**:
->    - *Problem*: Model-model OpenCode free (mis. `oc/deepseek-v4.1-flash-free`) tertolak `403 FreeTierError` karena egress IP lokal ter-flag Cloudflare WAF, sementara `proxyPools` kosong sehingga tidak ada failover.
->    - *Solution*: `scripts/setup-vpsease-proxy.mjs` upsert pool `vpsease-main` (`socks5://127.0.0.1:20808?dns=local` — VLESS egress dengan DNS lokal via patch `?dns=local` v0.5.108) dan mengikatnya ke strategi opencode; lane `noauth` kini me-rotasi antar pool sebagai virtual connection `proxy:<id>` dengan failover antar-pool (merge PR #4998, #4984, #5003, #4922 dari `anojndr/9router`).
+>    - *Problem*: Model-model OpenCode free (mis. `oc/deepseek-v4.1-flash-free`) tertolak `403 FreeTierError` — ini egress-reputation block (egress IP lokal ter-flag Cloudflare WAF), bukan masalah akun, karena free tier tidak membawa kredensial.
+>    - *Solution*: Tidak perlu setup manual di dalam 9router — VPSEase otomatis mengonfigurasi outbound proxy dengan PATCH `/api/settings` (`outboundProxyUrl`), dan `open-sse/utils/proxyFetch.js` menghormati setting tersebut. Langkah 9router-side bersifat OPSIONAL: bind pool proxy ke provider `opencode` via `node scripts/seed-opencode-proxy-pool.mjs` untuk mengaktifkan `strictProxy` (fail-closed: request yang ter-flag tidak pernah di-replay lewat egress direct, commit `a14ff01b`) dan failover multi-pool (commit `8d2116ce`). Script lama `scripts/setup-vpsease-proxy.mjs` sudah **DEPRECATED** dan menolak jalan.
 
 ---
 

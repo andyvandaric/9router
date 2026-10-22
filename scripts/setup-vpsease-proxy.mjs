@@ -1,7 +1,41 @@
-import fs from "fs";
+// DEPRECATED (2026-10-22): Superseded by scripts/seed-opencode-proxy-pool.mjs.
+// Retired for two defects (verified against scripts/seed-opencode-proxy-pool.mjs):
+//   1. This script wrote `strictProxy: false`, which re-opens the direct-egress
+//      leak that commit a14ff01b closed — a 403 free-tier rejection would be
+//      replayed on the host's direct IP.
+//   2. This script wrote `rotateStrategy: "round-robin"`, discarding the pool pin
+//      and rotating across ALL active pools.
+// It also hardcoded %APPDATA%/9router/db/data.sqlite instead of resolving DATA_DIR.
+// See docs/opencode-freetier-egress.md. The old body below is preserved for the
+// historical record (CHANGELOG.md references this file) but is unreachable.
+process.stderr.write(
+  [
+    "ERROR: scripts/setup-vpsease-proxy.mjs is DEPRECATED and refuses to run.",
+    "",
+    "Reasons this script is retired:",
+    "  1. It would write `strictProxy: false`, re-opening the direct-egress leak",
+    "     that commit a14ff01b closed (403 free-tier rejections replayed on the",
+    "     host's direct IP).",
+    "  2. It would write `rotateStrategy: \"round-robin\"`, discarding the pool pin",
+    "     and rotating across ALL active pools.",
+    "",
+    "Use the replacement script instead (resolves DATA_DIR, writes",
+    "strictProxy:true, pins rotateStrategy:\"none\", idempotent):",
+    "",
+    "  node scripts/seed-opencode-proxy-pool.mjs",
+    "",
+  ].join("\n") + "\n"
+);
+process.exit(1);
+
+/* eslint-disable no-unreachable */
 import path from "path";
-import Database from "better-sqlite3";
 import os from "os";
+
+// better-sqlite3 is an optional dependency and may be absent. Static import
+// declarations are hoisted and evaluated before the deprecation guard above
+// can run, so resolve it lazily here, inside the unreachable legacy body.
+const Database = (await import("better-sqlite3")).default;
 
 // Script to bind VPSEase local proxy tunnel to 9Router Proxy Pools
 const appData = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");

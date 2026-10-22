@@ -1,3 +1,20 @@
+# v0.5.111-andyvandaric-patch (2026-10-22, fork)
+
+## Fixes (fork: OpenCode free-tier egress hardening — 403 classification, bounded retry, strictProxy, pool failover)
+- **403 FreeTierError classification**: new `open-sse/utils/freeTierEgress.js` (with `open-sse/config/errorConfig.js` constants) distinguishes two 403 `FreeTierError` variants. The client-fingerprint variant evicts the stable session and retries exactly once — never entering the backoff loop. The egress-abuse variant takes bounded retry (`MAX_EGRESS_ATTEMPTS = 3`) with growing backoff, then surfaces an actionable terminal error `{ error: { type: "FreeTierError", kind: "egress_abuse", message: buildEgressUnavailableMessage(ctx) } }` — HTTP status stays **403** (client contract unchanged).
+- **Proxy-pool liveness probe**: new `open-sse/utils/proxyHealth.js` adds a SOCKS5 CONNECT liveness probe with a hard timeout and a 30 s TTL single-flight cache. A configured-but-unusable pool now fails terminally `EGRESS_PROXY_UNAVAILABLE` instead of silently egressing direct, and the synthetic `noauth` account is never locked in the DB.
+- **strictProxy — no direct-egress replay**: `open-sse/utils/proxyFetch.js` refuses to replay a flagged free-tier request on the host's direct IP (closing the replay path v0.5.108's "replay proxied 403 once, direct" left open for gated lanes). New sanctioned seeder `scripts/seed-opencode-proxy-pool.mjs` writes `strictProxy: true` and pins `rotateStrategy: "none"`, prints the pool's `strictProxy` flag in its verified output, and documents the fail-closed escape hatch.
+- **Pinned-pool failover**: a pinned no-auth pool excluded after a fallbackable error now fails over to another active pool instead of dropping the request (`src/sse/services/auth.js`; regression guard `tests/unit/noauth-pinned-pool-failover.test.js`).
+- **Dashboard — save fallback strategy no longer drops the pool binding**: saving a fallback strategy used to delete `proxyPoolId`/`rotateStrategy`; new `src/shared/providerStrategies.js` (`mergeProviderStrategy()`) merges fallback-strategy-only saves so the pool binding survives the round-trip (`tests/unit/provider-strategy-merge.test.js`).
+- **OpenCode deepseek-v4.1 lane**: the `deepseek-v4.1-*` generation is chat-completions-only, and the `.1` ids are declared on the curated OpenCode and OpenCode Zen lanes (`open-sse/providers/models/helpers.js`, `providers/registry/opencode.js`, `providers/registry/opencode-zen.js`).
+- **Deprecation**: `scripts/setup-vpsease-proxy.mjs` is deprecated and now refuses to run (prints a notice, exits **1**); `scripts/seed-opencode-proxy-pool.mjs` is the sanctioned replacement seeding the VPSEase SOCKS5 pool.
+## Verification
+- **Targeted vitest groups (2026-10-22, 63/63 pass)**: `unit/noauth-pinned-pool-failover`, `unit/noauth-proxy-fallback`, `unit/provider-strategy-merge`, and the `opencode-free-*`, `proxy*`, `socks-proxy-dns` groups — **10 files, 63 tests pass** (includes the new freeTierEgress classification, strictProxy no-replay, and pinned-pool failover regression guards).
+- **Regression baselines unchanged**: `tests/__baseline__/verify-providers.mjs` → 94 providers; `verify-alias.mjs` → 132 tokens — both match committed snapshots.
+- **Syntax**: touched sources pass `node --check` — `freeTierEgress.js`, `proxyHealth.js`, `proxyFetch.js`, `errorConfig.js`, `auth.js`, `models/helpers.js`, `registry/opencode.js`, `registry/opencode-zen.js`, `providerStrategies.js`, `seed-opencode-proxy-pool.mjs`, `setup-vpsease-proxy.mjs`.
+- **JSON validity**: `node -e "JSON.parse(...)"` on both `package.json` files — both parse clean at `0.5.111`.
+- **Release state**: released locally on `master` only — unpushed; no push, no PR, and no tag yet for `v0.5.111-andyvandaric-patch` (matching prior fork-release convention).
+
 # v0.5.110-andyvandaric-patch (2026-10-20, fork)
 
 ## Fixes (fork: automated DB retention + anojndr hardening + vpsease proxy pool)
