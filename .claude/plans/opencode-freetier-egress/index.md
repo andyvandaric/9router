@@ -3,7 +3,7 @@
 **Document ID**: `PRD-20261020-OPENCODE-EGRESS-RETRY`
 **Status**: ✅ COMPLETED for Phases 01–08 and 10 (all landed on `master`, unpushed). Phase 09 CUT (no file, never existed). Phase 11 PARTIAL: the dashboard strategy-merge fix landed; its chunk A binding test and chunk C rotation module did not. See §9 for the per-phase landing record.
 **Confidence**: 97% (see §8 for what is resolved and what remains empirically unknowable)
-**Last Verified Against Disk**: 2026-10-22 11:07 (UTC+0700)
+**Last Verified Against Disk**: 2026-10-22 14:14 (UTC+0700)
 **Supersedes**: `.claude/plans/opencode-freetier-fix/` (obsolete: targets muse-spark-1.3, `/zen/v1`, UA 1.19.0, dual-session headers — all already implemented or retired)
 
 ---
@@ -177,3 +177,33 @@ Only the egress differed, so the block tracks the IP, not the account. Two conse
 2. **Liveness ≠ clean.** The Phase 03 probe proves the tunnel is alive; it says nothing about the egress IP's reputation. The terminal error must name both remedies: run the probe, and if the 403 persists after the retries, change egress (rotating the pool node). Switching IPv4/IPv6 does not help — IP reputation is the signal.
 
 **Confidence 97%.** The remaining 3% is the upstream's real transient behaviour — unknowable without a live block, and it changes no implementation decision.
+
+---
+
+## 9. 📦 Per-phase landing record
+
+Reconciled against live disk and `git log` on **2026-10-22 14:14 (UTC+0700)**. Every commit SHA below was read from the repository's own history, not from a note.
+
+| Phase | Status | Landing commit(s) | Files that actually landed |
+|---|---|---|---|
+| **01 — Classify the two FreeTierError variants** | ✅ Done | `6886f112` | `open-sse/utils/freeTierEgress.js` (NEW), `tests/unit/free-tier-egress-classify.test.js` (NEW) |
+| **02 — Egress retry + backoff** | ✅ Done | `68d8b1bb` | `open-sse/executors/opencode.js` (EDIT), `tests/unit/opencode-egress-retry.test.js` (NEW) |
+| **03 — Proxy health probe** | ✅ Done | `6886f112` | `open-sse/utils/proxyHealth.js` (NEW, ~198 LOC), `tests/unit/proxy-health-probe.test.js` (NEW) |
+| **04 — No-auth, no direct leak** | ✅ Done | `68d8b1bb` | `src/sse/services/auth.js` (EDIT), `tests/unit/noauth-egress-resolution.test.js` (NEW) |
+| **05 — Error taxonomy** | ✅ Done | `6886f112` | `open-sse/config/errorConfig.js` (EDIT), `tests/unit/error-config-freetier.test.js` (NEW) |
+| **06 — Terminal error** | ✅ Done **with deviation** | `68d8b1bb` | `open-sse/executors/opencode.js` (EDIT) — co-touched `src/sse/services/auth.js`, `tests/unit/noauth-egress-resolution.test.js`, `tests/unit/noauth-proxy-fallback.test.js`, `tests/unit/opencode-egress-retry.test.js` |
+| **07 — Seed script + runbook** | ✅ Done | `a14ff01b`, `79990894`, `ba64c975` | `scripts/seed-opencode-proxy-pool.mjs` (NEW), `tests/unit/seed-opencode-proxy-pool.test.js` (NEW), `tests/unit/opencode-freetier-direct-replay.test.js` (EDIT). **`docs/opencode-freetier-egress.md` is on disk but UNTRACKED** — `.gitignore:52` ignores `docs/*` and only `!docs/ARCHITECTURE.md` is un-ignored, so the runbook is not in any commit. |
+| **08 — Pinned-pool failover** | ✅ Done | `8d2116ce`, `6ca7d389`, `af591a0d` | `src/sse/services/auth.js` (EDIT), `tests/unit/noauth-pinned-pool-failover.test.js` (NEW); `open-sse/providers/registry/opencode.js` + `open-sse/providers/registry/opencode-zen.js` (EDIT — declare the `deepseek-v4.1-*` ids on the curated lanes); `open-sse/providers/models/helpers.js` (EDIT — keep the `deepseek-v4.1-*` ids on chat completions only) with `tests/unit/noauth-proxy-fallback.test.js` (EDIT) |
+| **09** | ✂️ **CUT** | — | No phase file was ever created and no commit exists. The scope was absorbed by Phase 04 (no-auth egress resolution). |
+| **10 — strictProxy, no direct leak** | ✅ Done **with deviation** | `a14ff01b`, `79990894`, `ba64c975` | `open-sse/utils/proxyFetch.js` (EDIT), `scripts/seed-opencode-proxy-pool.mjs` (NEW), `tests/unit/opencode-freetier-direct-replay.test.js` (EDIT), `tests/unit/seed-opencode-proxy-pool.test.js` (NEW) |
+| **11 — VPSEase egress rotation** | 🟡 **PARTIAL** | `60f6de30` (+ chunk B via `a14ff01b`) | **Landed:** the dashboard strategy-merge fix — `src/shared/providerStrategies.js` (NEW), `src/app/(dashboard)/dashboard/providers/[id]/page.js` (EDIT), `src/app/(dashboard)/dashboard/providers/components/ConnectionsCard.js` (EDIT), `tests/unit/provider-strategy-merge.test.js` (NEW); plus chunk B's `strictProxy` change in `open-sse/utils/proxyFetch.js` via `a14ff01b`. **Did NOT land:** chunk A's own test `tests/unit/seed-opencode-proxy-pool-binding.test.js` (never created) and chunk C in its entirety — `open-sse/utils/vpseaseRotation.js` and `open-sse/config/vpseaseConfig.js` (neither file exists on disk). |
+
+### Recorded deviations
+
+1. **Phase 06 — terminal error landed in a different file than planned.** The plan targeted `src/sse/handlers/chat.js`. The actionable terminal error instead landed in `open-sse/executors/opencode.js` via `rewriteEgressRejection` (from `open-sse/utils/freeTierEgress.js`), because that is the layer that owns the upstream response and therefore the only place the error body can be replaced before it reaches the client. `src/sse/handlers/chat.js` was not modified.
+
+2. **Phase 10 — the strictProxy change landed in `proxyFetch.js` only.** The phase was scoped as "2 source + 2 test", but the seed-script half (`scripts/seed-opencode-proxy-pool.mjs`, which writes `strictProxy: true`) was folded into **Phase 07**'s script rather than landing as a separate Phase-10 deliverable. `open-sse/utils/proxyFetch.js` carries the env-origin guard and the egress-abuse marker guard in `replayFreeTierRejectionDirect`; the operator-visible `strictProxy` print landed in `ba64c975` and its rationale comment in `79990894`.
+
+3. **Phase 11 — PARTIAL, with the landed and unlanded chunks named.** Chunk B (`strictProxy`) landed in `a14ff01b`. The dashboard strategy-merge fix landed in `60f6de30`. Chunk A's own test file was never created. Chunk C was not implemented at all: `open-sse/utils/vpseaseRotation.js` and `open-sse/config/vpseaseConfig.js` do not exist. The phase stays **🟡 Partial** — deferred, not failed — and the rotation capability it describes is **not** available in the shipped build.
+
+4. **Phase 07 — the runbook is untracked.** `docs/opencode-freetier-egress.md` exists on disk (10,761 bytes) but no commit contains it, because `.gitignore:52` ignores `docs/*`. Landing it needs an explicit `git add -f` or a `.gitignore` exception; the blueprint does not assume either.
