@@ -32,33 +32,35 @@ Migrate the two hand-written provider registry files off their locally-maintaine
 
 ### Recorded Design Decisions (DD — rationale recorded)
 - **DD-1 — Fingerprint-blocked ids STAY declared.** `beam-free`, `nemotron-3.5-super-vl-free`, `nemotron-3.5-lightning-free` remain in the registry. They ARE published upstream (HTTP 200 on the lane catalogs) — their 403 `FINGERPRINT_BLOCKED` ("OpenCode's free tier can only be used from within OpenCode", E6) is a **client-fingerprint condition this repo can fix** (the `"desktop"` header, DD-3), not an upstream removal. Removing a published id would create a *missing-exposure* defect (index §6 KPI: Missing exposure 3 → 0).
-- **DD-2 — 410 ids GO.** `muse-spark-1.2-contributor-free` returns HTTP 410 `Model muse-spark-1.2-contributor-free has been deprecated.` (E3) and must be removed from the registry **and** from `forceAutoToolChoiceModels`. It is announced-as-served by the false L38-41 comment, which is deleted.
+- **DD-2 — Only the genuinely-410 id GOES.** `muse-spark-1.2-contributor-free` **STAYS**: three repo sources corroborate that 1.2 is **served** while only 1.3 is 410 — `registry/opencode.js:37-41` (live-verified 2026-10-17: *"ABSENT from the /models listing but the inference endpoint still serves it (dashboard ping 200) — keep declared"*), `tests/unit/executor-const-guard.test.js:55-66` (asserts 1.2 present, 1.3 absent), and `CHANGELOG.md:90` (1.2 deliberately restored). An earlier draft of this phase removed 1.2 as a 410 model — **that was wrong and is retracted.** What DOES go on the inference lane is the stale `forceAutoToolChoiceModels` entry naming `muse-spark-1.3-contributor-free` (L30), which is 410. **The L34-41 comment block is KEPT, not deleted** — its claims are accurate and it is the only on-disk record of the 1.2/1.3 distinction. *Named verification step:* re-probe 1.2 before editing; if it returns 410, restore it to the removal set.
 - **DD-3 — Header `"desktop"` → `"cli"`.** `OPENCODE_CLIENT = "cli"` in `open-sse/executors/opencode.js` L23 and `open-sse/executors/opencode-zen.js` L25; the executors honour a caller-supplied `x-opencode-client` and otherwise send `"cli"` (opencode.js L501, opencode-zen.js L224). The registry's `"desktop"` default is therefore the *only* source of the fingerprint rejection. Change it in four places: `registry/opencode.js` L18 (transport headers) and L50 (`systemoneConfig.headers`); `registry/opencode-zen.js` L127 (`systemoneConfig.headers`; its transport headers at L23 are empty). All four must agree with the executor constant.
-- **DD-4 — Lane-keyed, not shared.** The two registries must NOT be treated as one merged free list. `big-pickle` is free/inference-lane only; the zen lane does not publish it. `zen:big-pickle` is `UNKNOWN` in the SSOT (Phase 01 §7 S1) and the zen registry **must not** declare it. *Note:* master index §5 row P05 says "add `big-pickle`" to zen — that phrasing is **superseded by this spec**; the authoritative, lane-keyed rule is §7 S1 and the E2 evidence ("`big-pickle` — which upstream publishes on the FREE lane — is missing from the zen registry (correctly, since the zen lane does not publish it)").
+- **DD-4 — Lane-keyed, not shared — and `big-pickle` is NOT absent from zen.** The two registries must NOT be treated as one merged free list. **Corrected on disk (2026-10-23):** `big-pickle` is already declared in the zen registry at `opencode-zen.js:106` as a **paid-lane** model (`{ id: "big-pickle", name: "Big Pickle", supportedFormats: ["openai"] }`), sitting *above* the `// Free tier on the keyed lane` comment at L108. It is therefore **not** a missing id and **nothing needs adding**. Two consequences: (a) the master index §5 row P05's instruction to "add `big-pickle`" to zen is **superseded — do not follow it** (it would create a duplicate); (b) an earlier draft of this DD asserted big-pickle was absent from zen, which is **wrong and is retracted**. The lane-keyed principle still holds: do not move ids between the paid and free blocks, and do not assume an inference-lane id is zen-lane live.
 - **DD-5 — Field preservation per surviving id.** Migration preserves `targetFormat`, `supportedFormats`, and `kind` verbatim on every surviving id. Dropping `targetFormat: "openai-responses"` or `kind: "systemone"` would silently change routing.
-- **DD-6 — No hand-maintained free ids after migration.** The free ids the registry declares for a lane are `listFreeModels(lane)` filtered by the fields the lane's transport requires; no literal free list survives in either file.
+- **DD-6 — No hand-maintained free ids after migration (zen lane only).** On the **zen** lane the declared free ids are `listFreeModels(LANES.ZEN)` filtered by the lane's transport requirements; no literal free list survives there. **Exception (audit 2026-10-23): the inference lane keeps its 3 literal declarations**, because each carries a per-id routing field (`targetFormat: "openai-responses"`, `kind: "systemone"`) that `listFreeModels` does not supply — deriving them would lose routing metadata (DD-5). The inference lane's literal list is *verified against* the SSOT by the test, not replaced by it. Both registries still share **one SSOT**; neither duplicates a *liveness* constant.
 
 ---
 
 ## 🏛️ 2. Architectural Specification
 
 ### `open-sse/providers/registry/opencode.js` (free/inference lane)
-- **Declared models list (L33-45) after migration — 3 → 2 entries:**
-  - REMOVE `muse-spark-1.2-contributor-free` (L42) — SSOT `state = DEPRECATED`, upstream 410 (DD-2).
+- **Declared models list (L33-45) after migration — 3 → 3 entries (NO removal on this lane):**
+  - KEEP `muse-spark-1.2-contributor-free` (L42) — 1.2 is **live** (DD-2); keeps `targetFormat: "openai-responses"` (DD-5).
   - KEEP `deepseek-v4.1-flash-free` (L43) WITH `supportedFormats: ["openai"]` (DD-5).
   - KEEP `jev-1.13-free` (L44) WITH `kind: "systemone"` (DD-5).
 - Other free ids (`glm-5.3-flash-free`, `nemotron-*`, `longcat`, `deepseek`, `mimo`, `beam`, `space-bunny`, `big-pickle`) continue to arrive through `passthroughModels` (L55) from `modelsFetcher` (L54, `https://opencode.ai/inference/v1/models`) — no literal declaration is added or removed for them; DD-1 keeps the fingerprint-blocked ones present in what the fetcher exposes.
-- L34-41: the comment block is **deleted** (its "keep declared" claim for `muse-spark-1.2-contributor-free` is false — E3).
-- L30: `forceAutoToolChoiceModels: ["muse-spark-1.3-contributor-free"]` — that id upstream-410s; the key is removed (leave `quirks: {}` or drop `quirks`; removing the stale entry, not the quirk mechanism).
+- L34-41: the comment block is **KEPT verbatim** (DD-2 — its claims are accurate and it is the only on-disk record of the 1.2/1.3 distinction). Do **not** delete it, and do **not** edit its text.
+- L30: `forceAutoToolChoiceModels: ["muse-spark-1.3-contributor-free"]` — 1.3 IS 410, so this entry is stale; the key is removed (leave `quirks: {}` or drop `quirks`; removing the stale entry, not the quirk mechanism).
 - L18 transport header and L50 `systemoneConfig` header `"desktop"` → `"cli"` (DD-3).
+- **No model addition and no model removal on this lane.** The only functional change is the header fix (DD-3) plus the stale quirk removal.
 
 ### `open-sse/providers/registry/opencode-zen.js` (zen lane)
 - **Free ids after migration — 10 → 4 (stay):** `deepseek-v4.1-flash-free` (L110), `mimo-v2.6-flash-free` (L111), `nemotron-3.5-lightning-free` (L115), `jev-1.13-free` (L121, `kind: "systemone"`).
 - **REMOVE 6 STALE (not in the zen lane catalog — E2/E4.4):** `deepseek-v4-flash-free` (L109), `mimo-v2.5-free` (L112), `ling-3.0-flash-fin-free` (L113), `nemotron-3-ultra-free` (L114), `muse-spark-1.3-contributor-free` (L117), `muse-spark-1.2-contributor-free` (L118).
+  > **⚠️ AUDIT NOTE (2026-10-23).** The **1.2** removal here is a **lane-specific** claim and is NOT covered by the inference-lane liveness evidence in DD-2. The 1.2-served finding (`registry/opencode.js:37-41`) is against `https://opencode.ai/inference/v1/models`; the zen lane is a **different endpoint** (`zen/v1/models`, L131) and liveness is a `(lane, id)` property. 1.2 is therefore removed here **only if** the zen catalog genuinely omits it. *Named verification step (chunk 2, before edit):* probe `zen/v1/models` for both muse ids. If the zen lane serves 1.2, keep it and remove only 1.3. Do not infer zen liveness from the inference-lane evidence in either direction.
 - Non-free `jev-1.13` (L120, `kind: "systemone"`) is untouched — it is not a free id.
-- **NOT added:** `big-pickle` (DD-4).
+- **NOT added:** `big-pickle` — already present at `opencode-zen.js:106` on the paid lane; do not duplicate it into the free block (DD-4).
 - L127 `systemoneConfig` header `"desktop"` → `"cli"` (DD-3).
-- Removal rule per id: an id is removed iff `getState("zen", id).state` is `DEPRECATED`, `DEAD_UPSTREAM`, or `UNKNOWN`-on-this-lane; it is kept iff `ALIVE` or `FINGERPRINT_BLOCKED` (DD-1). The lane is part of the key.
+- Removal rule per id: an id is removed iff `getState("zen", id).state` is `DEPRECATED`, `DEAD_UPSTREAM`, or `UNKNOWN`-on-this-lane **and** a probe confirms it; it is kept iff `ALIVE` or `FINGERPRINT_BLOCKED` (DD-1). The lane is part of the key.
 
 ### Shared-derivation rule (DD-6)
 Both files declare free ids as a projection of `listFreeModels(lane)` — `LANES.INFERENCE` / `LANES.ZEN` — filtered by the lane transport's format requirements. Neither file imports a literal free list. The two registries share **one SSOT, zero duplicated constants**.
@@ -70,27 +72,31 @@ Both files declare free ids as a projection of `listFreeModels(lane)` — `LANES
 **BEFORE — the declared registry and the measured upstream result:**
 ```
 $ node -e "import('./open-sse/providers/registry/opencode.js').then(m=>console.log(m.default.models.map(x=>x.id)))"
-[ 'muse-spark-1.2-contributor-free', 'deepseek-v4.1-flash-free', 'jev-1.13-free' ]   # declares a 410 model
+[ 'muse-spark-1.2-contributor-free', 'deepseek-v4.1-flash-free', 'jev-1.13-free' ]
+# 1.2 is LIVE (inference ping 200) — this list is correct; the DEFECT is the header
 # headers: x-opencode-client: "desktop"  (registry L18/L50)  vs executor OPENCODE_CLIENT = "cli"
 
 $ curl -s -X POST https://opencode.ai/inference/v1/chat/completions ... -d '{"model":"beam-free"}'
 HTTP 403 FINGERPRINT_BLOCKED  "OpenCode's free tier can only be used from within OpenCode"
-$ curl -s ... -d '{"model":"muse-spark-1.2-contributor-free"}'
-HTTP 410 Model muse-spark-1.2-contributor-free has been deprecated.
+$ curl -s ... -d '{"model":"muse-spark-1.3-contributor-free"}'
+HTTP 410 Model muse-spark-1.3-contributor-free has been deprecated.
 ```
 
-**AFTER — corrected registry and corrected header, routing fields intact:**
+**AFTER — corrected header, stale quirk gone, every live model still declared:**
 ```
 $ node -e "import('./open-sse/providers/registry/opencode.js').then(m=>console.log(m.default.models.map(x=>x.id)))"
-[ 'deepseek-v4.1-flash-free', 'jev-1.13-free' ]        # 410 id gone; no false comment
-# deepseek-v4.1-flash-free -> supportedFormats: ["openai"]   (preserved)
-# jev-1.13-free           -> kind: "systemone"              (preserved)
-# quirks: forceAutoToolChoiceModels no longer names a 410 model
+[ 'muse-spark-1.2-contributor-free', 'deepseek-v4.1-flash-free', 'jev-1.13-free' ]   # UNCHANGED — 1.2 is live
+# muse-spark-1.2-contributor-free -> targetFormat: "openai-responses"  (preserved)
+# deepseek-v4.1-flash-free       -> supportedFormats: ["openai"]       (preserved)
+# jev-1.13-free                  -> kind: "systemone"                  (preserved)
+# quirks: forceAutoToolChoiceModels no longer names the 410 1.3 id
+# comment block L34-41 KEPT (accurate)
 # headers (transport L18 + systemoneConfig L50): x-opencode-client: "cli"
 
 $ node -e "import('./open-sse/providers/registry/opencode-zen.js').then(m=>console.log(m.default.models.filter(x=>x.id.endsWith('-free')).map(x=>x.id)))"
 [ 'deepseek-v4.1-flash-free', 'mimo-v2.6-flash-free', 'nemotron-3.5-lightning-free', 'jev-1.13-free' ]
-# 6 stale ids gone; big-pickle NOT present (zen lane does not publish it)
+# zen free block closed; 1.3 gone
+# big-pickle already present on the PAID lane (zen L106) — unchanged, not duplicated
 # systemoneConfig header (L127): x-opencode-client: "cli"
 ```
 
@@ -104,17 +110,18 @@ $ node -e "import('./open-sse/providers/registry/opencode-zen.js').then(m=>conso
 
 ### `tests/unit/opencode-free-registry.test.js` — assertions
 1. Every declared id's SSOT state is not `DEPRECATED` / `DEAD_UPSTREAM`; every id the SSOT marks `ALIVE` on the inference lane is declared or reachable via `passthroughModels`.
-2. `muse-spark-1.2-contributor-free` is **absent**; `muse-spark-1.3-contributor-free` is **absent** (both 410).
+2. `muse-spark-1.2-contributor-free` is **PRESENT** with `targetFormat === "openai-responses"` (1.2 is live — DD-2); `muse-spark-1.3-contributor-free` is **absent**.
 3. `jev-1.13-free` is present **with** `kind === "systemone"`.
 4. `deepseek-v4.1-flash-free` keeps `supportedFormats` deep-equal `["openai"]`.
 5. `transport.headers["x-opencode-client"] === "cli"` **and** `systemoneConfig.headers["x-opencode-client"] === "cli"` — and both equal `OPENCODE_CLIENT` read from the executor.
-6. `forceAutoToolChoiceModels` does not contain any 410 model id.
+6. `forceAutoToolChoiceModels` does not contain any 410 model id (specifically not `muse-spark-1.3-contributor-free`).
 7. `modelsFetcher.url === "https://opencode.ai/inference/v1/models"` (unchanged).
+8. The L34-41 comment block is **still present** (DD-2 — it is the on-disk record of the 1.2/1.3 distinction; deleting it is a regression).
 
 ### `tests/unit/opencode-zen-free-registry.test.js` — assertions
-1. The zen free set deep-equals `listFreeModels(LANES.ZEN)` projected through the lane rules; `muse-spark-1.2-contributor-free` is **absent**.
-2. The zen registry does **NOT** contain `big-pickle` (DD-4).
-3. `muse-spark-1.3-contributor-free` is **absent**.
+1. The zen free block uses no literal free-id list; its members deep-equal `listFreeModels(LANES.ZEN)` projected through the lane rules; `muse-spark-1.3-contributor-free` is **absent**.
+2. `muse-spark-1.2-contributor-free`'s zen-lane presence matches the **probed** `zen/v1/models` result (chunk 2 verification step) — asserted against the probe outcome, not assumed either way.
+3. `big-pickle` IS present at `opencode-zen.js:106` on the **paid** lane and is **not duplicated** into the free block (DD-4).
 4. `jev-1.13-free` present with `kind === "systemone"`; non-free `jev-1.13` untouched.
 5. `systemoneConfig.headers["x-opencode-client"] === "cli"`.
 6. `modelsFetcher.url === "https://opencode.ai/zen/v1/models"`.
@@ -130,15 +137,15 @@ $ node -e "import('./open-sse/providers/registry/opencode-zen.js').then(m=>conso
 ### 📦 Chunk 1: Inference-lane registry (domain: open-sse/providers/registry)
 - **Target File(s):** `open-sse/providers/registry/opencode.js` [AMEND] & `tests/unit/opencode-free-registry.test.js` [NEW]
 - **Scope Boundary:** 1 registry + 1 test; no zen file, no `index.js`, no SSOT change
-- **Exact Task:** (1) delete the L38-41 false comment and the `muse-spark-1.2-contributor-free` entry (L42); (2) change L18 + L50 `x-opencode-client` to `"cli"`; (3) remove the 410 id from `forceAutoToolChoiceModels` (L30); preserve `supportedFormats`/`kind` on the survivors.
-- **Deterministic Verification:** `cd tests && npx vitest run unit/opencode-free-registry.test.js`
-- **Expected Output:** PASS
+- **Exact Task:** (1) **first, re-probe `muse-spark-1.2-contributor-free` on the inference endpoint and record the status** — if it returns 410 the prune set changes (DD-2 named verification step); (2) change L18 + L50 `x-opencode-client` to `"cli"`; (3) remove the stale 410 id from `forceAutoToolChoiceModels` (L30); (4) **KEEP** the L34-41 comment block verbatim and **KEEP** all 3 declared models with their fields; preserve `supportedFormats`/`kind`/`targetFormat` on the survivors. No model addition or removal on this lane.
+- **Deterministic Verification:** `cd tests && npx vitest run unit/opencode-free-registry.test.js unit/executor-const-guard.test.js`
+- **Expected Output:** PASS — including the existing `executor-const-guard` guard that asserts 1.2 present / 1.3 absent.
 - **DoD:** 0 NEW failures vs baseline.
 
 ### 📦 Chunk 2: Zen-lane registry (domain: open-sse/providers/registry)
 - **Target File(s):** `open-sse/providers/registry/opencode-zen.js` [AMEND] & `tests/unit/opencode-zen-free-registry.test.js` [NEW]
 - **Scope Boundary:** 1 registry + 1 test; zen only
-- **Exact Task:** (1) remove the 6 stale free ids (L109, L112-L114, L117-L118); (2) change L127 `x-opencode-client` to `"cli"`; (3) keep `deepseek-v4.1-flash-free`, `mimo-v2.6-flash-free`, `nemotron-3.5-lightning-free`, `jev-1.13-free` with their fields intact; do NOT add `big-pickle`.
+- **Exact Task:** (1) **first, probe `zen/v1/models` for both muse ids and record the result** — the inference-lane liveness finding does not transfer across lanes; (2) remove the stale free ids (L109, L112-L114, and L117/L118 per the probe outcome); (3) change L127 `x-opencode-client` to `"cli"`; (4) keep `deepseek-v4.1-flash-free`, `mimo-v2.6-flash-free`, `nemotron-3.5-lightning-free`, `jev-1.13-free` with their fields intact; (5) do NOT add `big-pickle` (already present at L106 on the paid lane — DD-4).
 - **Deterministic Verification:** `cd tests && npx vitest run unit/opencode-zen-free-registry.test.js`
 - **Expected Output:** PASS
 - **DoD:** 0 NEW failures vs baseline.
@@ -155,11 +162,12 @@ $ node -e "import('./open-sse/providers/registry/opencode-zen.js').then(m=>conso
 
 ## ✅ 6. Definition of Done (DoD) Checklist
 
-- [ ] `registry/opencode.js` declares no 410 id; L34-41 comment deleted; `forceAutoToolChoiceModels` names no 410 model.
-- [ ] `registry/opencode.js` L18 + L50 and `registry/opencode-zen.js` L127 all send `x-opencode-client: "cli"`, matching `OPENCODE_CLIENT` in `open-sse/executors/opencode.js` L23 / `opencode-zen.js` L25.
-- [ ] Zen registry holds exactly the 4 surviving free ids; the 6 stale ids are gone; `big-pickle` is absent from zen (DD-4).
-- [ ] `deepseek-v4.1-flash-free` keeps `supportedFormats: ["openai"]`; `jev-1.13-free` keeps `kind: "systemone"` in both files.
+- [ ] `registry/opencode.js` headers (L18 + L50) send `x-opencode-client: "cli"`; the stale `muse-spark-1.3-contributor-free` quirk is gone; **all 3 declared models survive** (1.2 is live) and the L34-41 comment block is **kept**.
+- [ ] `registry/opencode-zen.js` L127 sends `x-opencode-client: "cli"`; the stale free ids are gone per the zen-lane probe; `big-pickle` at L106 (paid lane) is unchanged and NOT duplicated into the free block (DD-4).
+- [ ] `deepseek-v4.1-flash-free` keeps `supportedFormats: ["openai"]`; `jev-1.13-free` keeps `kind: "systemone"` in both files; `muse-spark-1.2-contributor-free` keeps `targetFormat: "openai-responses"`.
 - [ ] Fingerprint-blocked ids (`beam-free`, `nemotron-3.5-super-vl-free`, `nemotron-3.5-lightning-free`) remain declared/exposed (DD-1).
+- [ ] The existing `tests/unit/executor-const-guard.test.js` guard (1.2 present / 1.3 absent) still passes — it is the pre-existing witness that this phase must not contradict.
+- [ ] Both 1.2/1.3 liveness probes were run per lane and their results recorded in the `Completed Date` note.
 - [ ] `registry/opencode-go.js` untouched; no SSOT schema change; no other consumer site touched; no DDL.
 - [ ] `registry/index.js` regenerated only via script and byte-identical (zero diff).
 - [ ] Both new test files 100% PASS; `verify-no-regression.mjs` → **0 NEW failures** vs the 96-failure baseline (E9).

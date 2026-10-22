@@ -92,6 +92,8 @@ upstream response body  ──► classifyUpstreamStatus(status, body)
 ### Lane seed table
 The `LANES`-keyed seed entries are populated from the E2/E3 evidence already in the master index (e.g. `inference:big-pickle` ALIVE; `inference:beam-free` FINGERPRINT_BLOCKED; `inference:minimax-m3.1-flash-free` DEPRECATED → `deepseek-v4.1-flash-free`; `inference:jev-1.13-free` PROTOCOL_UNSUPPORTED; `go:muse-spark-1.3-contributor` ALIVE; `zen:muse-spark-1.3-contributor-free` DEPRECATED). Upstream lane snapshots (from the three `modelsFetcher` wirings — registry/opencode.js L54, opencode-zen.js L131, opencode-go.js L90) overlay the seed at read time.
 
+> **⚠️ SEED COMPLETENESS (audit 2026-10-23).** The seed must **also** carry `inference:muse-spark-1.2-contributor-free` = `ALIVE`. Three repo sources corroborate that 1.2 is served while only 1.3 is 410 (`registry/opencode.js:37-41`, `tests/unit/executor-const-guard.test.js:55-66`, `CHANGELOG.md:90`). Omitting it is not harmless: the seed is the fallback when a lane snapshot has not been fetched, and Phase 03 offers **ALIVE-only** ids — so a missing 1.2 seed would make the dashboard **hide a live model**, converting this blueprint's "Missing exposure" KPI from 3 to 4 instead of 0. *Named verification step (chunk 3):* re-probe 1.2 on the inference endpoint and record the status alongside the seed entry. **General rule for this chunk:** every id that a consumer phase will offer must have an explicit seed entry — a silently absent seed entry is indistinguishable from a dead model.
+
 ---
 
 ## 🎨 3. Visual & Interface Design (terminal — no web UI)
@@ -127,6 +129,7 @@ $ node -e "import('./open-sse/providers/freeModelCatalog.js').then(m=>console.lo
 ### Named test cases
 1. **pair keying** — `getState("inference","beam-free")` and `getState("go","beam-free")` return two independent entries with distinct `lane` values.
 2. **lane absence** — `getState("zen","big-pickle")` returns `state === FREE_MODEL_STATE.UNKNOWN`, not `ALIVE`.
+2b. **live-id seed completeness** — `getState("inference","muse-spark-1.2-contributor-free").state === FREE_MODEL_STATE.ALIVE` (1.2 is served — see the seed-completeness note in §2). Guards the failure mode where a missing seed silently hides a live model from Phase 03's ALIVE-only filter.
 3. **410 → DEPRECATED** — `classifyUpstreamStatus(410, <ModelDeprecated body>)` yields `DEPRECATED`, and the entry's `replacement` is recorded.
 4. **429 → QUOTA_BLOCKED** — `classifyUpstreamStatus(429, <FreeUsageLimitError body>)` yields `QUOTA_BLOCKED`.
 5. **403 fingerprint → FINGERPRINT_BLOCKED** — 403 "only OpenCode" body yields `FINGERPRINT_BLOCKED`.
