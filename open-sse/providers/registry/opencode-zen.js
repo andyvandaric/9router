@@ -90,6 +90,7 @@ export default {
     { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", supportedFormats: ["openai"] },
     { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", supportedFormats: ["openai"] },
     { id: "deepseek-v4-flash-vision-exp", name: "DeepSeek V4 Flash Vision Exp", supportedFormats: ["openai"] },
+    { id: "deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash", supportedFormats: ["openai"] },
     { id: "glm-5.3-flash", name: "GLM 5.3 Flash (Vision)", supportedFormats: ["openai"] },
     { id: "glm-5.3", name: "GLM 5.3", supportedFormats: ["openai"] },
     { id: "glm-5.2", name: "GLM 5.2", supportedFormats: ["openai"] },
@@ -106,6 +107,7 @@ export default {
     { id: "union-alpha", name: "Union Alpha", supportedFormats: ["claude"] },
     // Free tier on the keyed lane (chat completions)
     { id: "deepseek-v4-flash-free", name: "DeepSeek V4 Flash Free", supportedFormats: ["openai"] },
+    { id: "deepseek-v4.1-flash-free", name: "DeepSeek V4.1 Flash Free", supportedFormats: ["openai"] },
     { id: "mimo-v2.6-flash-free", name: "MiMo V2.6 Flash Free", supportedFormats: ["openai"] },
     { id: "mimo-v2.5-free", name: "MiMo V2.5 Free", supportedFormats: ["openai"] },
     { id: "ling-3.0-flash-fin-free", name: "Ling 3.0 Flash Fin Free", supportedFormats: ["openai"] },

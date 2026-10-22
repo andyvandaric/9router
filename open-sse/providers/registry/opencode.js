@@ -40,6 +40,7 @@ export default {
     // - muse-spark-1.3-contributor-free: upstream 410 ModelDeprecated — keep out.
     // - union-alpha: removed from the free tier — keep out.
     { id: "muse-spark-1.2-contributor-free", name: "Muse Spark 1.2 Contributor Free", targetFormat: "openai-responses" },
+    { id: "deepseek-v4.1-flash-free", name: "DeepSeek V4.1 Flash Free", supportedFormats: ["openai"] },
     { id: "jev-1.13-free", name: "Jev 1.13 Free", kind: "systemone" },
   ],
   serviceKinds: ["llm", "systemone"],
