@@ -1,6 +1,10 @@
 # Phase 05 — Error taxonomy for both FreeTierError variants
 
-**Status**: IN PROGRESS
+**Status**: ✅ Done (2026-10-22 11:42 (UTC+0700), Commit: 6886f112)
+**Completed Date:** 2026-10-22 11:42 (UTC+0700)
+**Duration:** ~2 days (Created records date only, no clock time — date-level precision)
+**Completed in**: Commit `6886f112` — `open-sse/config/errorConfig.js` (EDIT), `tests/unit/error-config-freetier.test.js` (NEW)
+**Reconciled 2026-10-22**: Reconciled against live disk at 11:42 (UTC+0700). Deviation per the phase's own live resolution (test 3 passed first, implementation followed): the fingerprint rule `{"can only be used from within opencode", cooldownMs: long}` landed **above** the egress rule `{"abusive traffic", backoff: true}` (errorConfig.js:73 vs :75) so fingerprint wins when both phrases appear; existing rules untouched.
 **Author**: claude
 **Confidence**: 97%
 **Date**: 2026-10-20

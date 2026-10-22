@@ -1,6 +1,10 @@
 # Phase 02 — Bounded egress retry with backoff in the opencode executor
 
-**Status**: PROPOSED
+**Status:** ✅ Done (2026-10-22 11:42 (UTC+0700), Commit: 68d8b1bb)
+**Completed Date:** 2026-10-22 11:42 (UTC+0700)
+**Duration:** ~2 days (Created records date only, no clock time — date-level precision)
+**Completed in**: Commit `68d8b1bb` — `open-sse/executors/opencode.js` (EDIT), `tests/unit/opencode-egress-retry.test.js` (NEW)
+**Reconciled 2026-10-22**: Reconciled against live disk at 11:42 (UTC+0700). Deviation (line drift only): the bounded egress loop landed at `opencode.js:443-473` with `MAX_EGRESS_ATTEMPTS = 3` at `:32` — upstream code shifted from the plan's ~407-421 estimate; semantics match the 2026-10-20 correction (fingerprint rotates exactly once, only egress gets the bounded backoff loop).
 **Author**: claude
 **Confidence**: 97%
 **Date**: 2026-10-20

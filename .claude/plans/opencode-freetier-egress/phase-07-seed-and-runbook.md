@@ -1,6 +1,6 @@
 # Phase 07 — Seed script + operator runbook
 
-**Status**: PROPOSED
+**Status**: ✅ Done (2026-10-22 12:18 (UTC+0700), Commits: `a14ff01b`, `79990894`, `ba64c975`)
 **Author**: claude
 **Confidence**: 97%
 **Date**: 2026-10-20
@@ -8,6 +8,10 @@
 
 **Wave**: 3 | **Domain**: scripts + docs | **Files**: 2 (1 script + 1 doc)
 **Depends on**: Phase 04 | **Unblocks**: none
+**Completed Date**: 2026-10-22 12:18 (UTC+0700)
+**Duration**: –
+**Completed in**: `a14ff01b` (NEW `scripts/seed-opencode-proxy-pool.mjs` + NEW `tests/unit/seed-opencode-proxy-pool.test.js`, with `tests/unit/opencode-freetier-direct-replay.test.js` extended in the same commit), `79990894` and `ba64c975` (seed-script follow-ups). `docs/opencode-freetier-egress.md` exists on disk but is **untracked** — `.gitignore:52` ignores `docs/*` (only `!docs/ARCHITECTURE.md` is un-ignored).
+**Reconciled 2026-10-22**: file reconciled against live disk. DEVIATION: `docs/opencode-freetier-egress.md` was written but never committed — the doc ships untracked only. The seed script deviates from the plan's standalone-test premise: Phase 10/11 chunk A folded the `providerStrategies.opencode = { proxyPoolId: "vpsease-main", rotateStrategy: "none" }` binding write and its own verification print into this script, so part of chunk A's substance lives here too.
 
 ## Part A — Fix the real reason VPSEase never took effect
 
@@ -45,7 +49,7 @@ Two defects in the existing `scripts/setup-vpsease-proxy.mjs` were confirmed by 
 
 ## TDD
 
-No unit test (operational script). Instead: run twice against a scratch DB and assert one row; verify the settings blob shape; verify the old broken script is either deleted or clearly marked superseded.
+No unit test at planning time (operational script). Changed in landing: `tests/unit/seed-opencode-proxy-pool.test.js` (NEW) landed with `a14ff01b` — a real, and security-relevant, test exists.
 
 ## Acceptance
 

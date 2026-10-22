@@ -1,8 +1,9 @@
 # Master PRD Blueprint: OpenCode Free Tier Egress Retry & Backoff
 
 **Document ID**: `PRD-20261020-OPENCODE-EGRESS-RETRY`
-**Status**: APPROVED — Hard Gate 2 granted by the Founder on 2026-10-20 ("mulai wave 1, test, debug, evaluasi, setelah lolos semua lanjut next")
+**Status**: ✅ COMPLETED for Phases 01–08 and 10 (all landed on `master`, unpushed). Phase 09 CUT (no file, never existed). Phase 11 PARTIAL: the dashboard strategy-merge fix landed; its chunk A binding test and chunk C rotation module did not. See §9 for the per-phase landing record.
 **Confidence**: 97% (see §8 for what is resolved and what remains empirically unknowable)
+**Last Verified Against Disk**: 2026-10-22 11:07 (UTC+0700)
 **Supersedes**: `.claude/plans/opencode-freetier-fix/` (obsolete: targets muse-spark-1.3, `/zen/v1`, UA 1.19.0, dual-session headers — all already implemented or retired)
 
 ---
@@ -27,7 +28,7 @@ Live DB evidence: `providerStrategies: {"antigravity": null}` — **no opencode 
 
 | Variant | Meaning | Correct action |
 |---|---|---|
-| `"OpenCode's free tier can only be used from within OpenCode."` | client fingerprint | fix fingerprint — **never blind-retry** |
+| `"OpenCode's free tier can only be used from within OpenCode."` | client fingerprint | evict the stable session and retry **once** (upstream answers a stale/exhausted session with this same body — live probes 2026-10-17); never enter the bounded backoff loop |
 | `"OpenCode's free models aren't available from your current network because we've detected abusive traffic from this IP address."` | **egress** | retry same egress + bounded backoff |
 
 ---
@@ -46,42 +47,61 @@ Live DB evidence: `providerStrategies: {"antigravity": null}` — **no opencode 
 
 ## 3. File map
 
-| Path | Change |
-|---|---|
-| `open-sse/utils/freeTierEgress.js` | **NEW** — `classifyFreeTierRejection()`, `EGRESS_UNAVAILABLE` builder, `rewriteEgressRejection()` |
-| `open-sse/utils/proxyHealth.js` | **NEW** — `probeProxyEgress()`, SOCKS5 CONNECT liveness, hard timeout, 30s TTL single-flight |
-| `open-sse/config/errorConfig.js` | **EDIT** — two rules above the status-403 rule |
-| `open-sse/executors/opencode.js` | **EDIT** — bounded egress retry loop replacing single evict+retry |
-| `src/sse/services/auth.js` | **EDIT** — noauth: configured-but-unusable pool → terminal, never proxyless |
-| `src/sse/handlers/chat.js` | **EDIT** — exhaustion path emits actionable error |
-| `scripts/seed-opencode-proxy-pool.mjs` | **NEW** — idempotent; uses `updateSettings` + `createProxyPool`, NOT raw SQL |
-| `docs/opencode-freetier-egress.md` | **NEW** — operator runbook |
+Status column reflects what is on disk as of 2026-10-22, not what was planned.
 
-Not changed: `proxyFetch.js` (direct→proxy replay explicitly out of scope), `src/lib/db/*`, `package.json`.
+| Path | Change | Landed |
+|---|---|---|
+| `open-sse/utils/freeTierEgress.js` | **NEW** — `classifyFreeTierRejection()`, `buildEgressUnavailableMessage()`, `rewriteEgressRejection()` | ✅ 6886f112 |
+| `open-sse/utils/proxyHealth.js` | **NEW** — `probeProxyEgress()`, SOCKS5 CONNECT liveness, hard timeout, 30s TTL single-flight | ✅ 6886f112 |
+| `open-sse/config/errorConfig.js` | **EDIT** — two rules above the status-403 rule | ✅ 6886f112 |
+| `open-sse/executors/opencode.js` | **EDIT** — bounded egress retry loop replacing single evict+retry; **also carries the Phase 06 terminal-error rewrite** | ✅ 68d8b1bb |
+| `src/sse/services/auth.js` | **EDIT** — noauth: configured-but-unusable pool → terminal, never proxyless; pinned-pool failover | ✅ 68d8b1bb, 8d2116ce |
+| `src/sse/handlers/chat.js` | **EDIT** — exhaustion path emits actionable error | ❌ **never modified** — see §9, Phase 06 |
+| `open-sse/utils/proxyFetch.js` | **EDIT** — env-origin and egress-variant replay guards (Phase 10; was declared out of scope in the original draft) | ✅ a14ff01b |
+| `scripts/seed-opencode-proxy-pool.mjs` | **NEW** — idempotent; uses `updateSettings` + `createProxyPool`, NOT raw SQL | ✅ a14ff01b, 79990894, ba64c975 |
+| `docs/opencode-freetier-egress.md` | **NEW** — operator runbook, **untracked** (`.gitignore:52` ignores `docs/*`) | ✅ on disk only |
+| `src/shared/providerStrategies.js` | **NEW** — `mergeProviderStrategy()`; not in the original plan (Phase 11) | ✅ 60f6de30 |
+
+Not changed: `src/lib/db/*`, `package.json`.
 
 ---
 
-## 4. Wave map
+## 4. Wave map (as shipped)
+
+Actual landing order. Waves 1–4 all shipped; the dependency graph held, but Wave 3's Phase 06 landed inside the executor rather than `chat.js`, and Wave 4 (Phase 08) carried two commits the plan never described.
 
 ```
-Wave 1 (parallel, no deps)
+Wave 1 (parallel, no deps)                ✅ 6886f112 (one commit, all three)
   ├─ 01 freeTierEgress.js + test
   ├─ 03 proxyHealth.js + test
   └─ 05 errorConfig.js + test
         │
-Wave 2 (after W1; 02 and 04 parallel with each other)
-  ├─ 02 opencode.js retry loop + test   (dep: 01)
-  └─ 04 auth.js noauth                  (dep: 03)
+Wave 2 (after W1; 02 and 04 parallel)     ✅ 68d8b1bb (one commit, both)
+  ├─ 02 opencode.js retry loop + test
+  └─ 04 auth.js noauth
         │
 Wave 3 (after W2)
-  ├─ 06 chat.js terminal error + test   (dep: 02, 05)
-  └─ 07 seed script + docs              (dep: 04)
+  ├─ 06 terminal error                    ✅ 68d8b1bb — landed in open-sse/executors/opencode.js, NOT chat.js
+  └─ 07 seed script + docs                ✅ a14ff01b (script), 79990894 + ba64c975 (docblock/print)
         │
 Wave 4 (last, sequential)
-  └─ 08 port PR #5046 pinned-pool failover
+  └─ 08 pinned-pool failover              ✅ 8d2116ce, plus af591a0d + 6ca7d389 (undocumented, see §9)
+        │
+Wave 5 (added after the plan)
+  └─ 10 strictProxy / no direct replay    ✅ a14ff01b
+        │
+Wave 6 (Phase 11)
+  ├─ chunk A — seed binds opencode pool   🟡 landed in substance (a14ff01b + 79990894 + ba64c975); its own test file tests/unit/seed-opencode-proxy-pool-binding.test.js was NOT created
+  ├─ chunk B — strictProxy fix            ✅ a14ff01b (= Phase 10)
+  ├─ dashboard strategy-merge fix         ✅ 60f6de30 (undocumented, see §9) — this is what made chunk A stick
+  └─ chunk C — D3 rotation module         ❌ NOT IMPLEMENTED — open-sse/utils/vpseaseRotation.js and open-sse/config/vpseaseConfig.js do not exist
+
+Phase 09                                  ⛔ CUT before implementation — no phase file exists, none will be created
 ```
 
 **Recommended split (user decision):** ship **Wave 1–2** first — that alone delivers "don't stop, auto-retry with backoff". Wave 3–4 become a separate follow-up PRD. Total is ~620–700 LOC, above the 600 split threshold.
+
+**What actually happened:** the split was not taken as a separate PRD — Waves 1–4, 5 and the Phase 11 dashboard fix all landed on `master` in one local run (6886f112 → 6ca7d389), none of it pushed. The only open work is Phase 11 chunk C.
 
 ---
 
@@ -105,31 +125,40 @@ Wave 4 (last, sequential)
 
 ## 6. KPI / Definition of Done
 
-- `403 abusive traffic` → ≥2 upstream attempts with growing delay before terminal error.
-- `403 can only be used from within OpenCode` → exactly 1 attempt (no retry).
-- Zero occurrences of `20808` / `localhost` in `src/`, `open-sse/`.
-- Zero proxyless connections returned while a `proxyPoolId` is configured.
-- No infinite loop when exactly one pool exists.
-- `nc/llm` regression baselines unchanged.
+Measured against disk 2026-10-22:
+
+| KPI | Status | Evidence |
+|---|---|---|
+| `403 abusive traffic` → up to `MAX_EGRESS_ATTEMPTS` (3) attempts with growing delay, then actionable terminal error | ✅ | `open-sse/executors/opencode.js:32,458-470`; `tests/unit/opencode-egress-retry.test.js:75` |
+| `403 can only be used from within OpenCode` → session evicted, retried **once**, second result returned (no backoff loop) | ✅ | `opencode.js:443-451`; `e2e` proven by `opencode-egress-retry.test.js:93` |
+| Zero occurrences of the proxy port `20808` in `src/`, `open-sse/` | ✅ | only `#20808D` (a Perplexity brand colour) matches |
+| Zero proxyless connections returned while a `proxyPoolId` is configured | ✅ | `src/sse/services/auth.js:130-150` throws `EGRESS_PROXY_UNAVAILABLE` |
+| No infinite loop when exactly one pool exists | ✅ | `auth.js:110-121`; `tests/unit/noauth-pinned-pool-failover.test.js:130` |
+| Provider/alias regression baselines unchanged | ✅ | `verify-providers.mjs` → 94 providers; `verify-alias.mjs` → 132 tokens |
+| Focused suites for phases 01–08, 10, 11-A green | ✅ | 10 files / 63 tests pass, 2026-10-22 11:07 |
+
+`"localhost"` was originally listed as forbidden too. It is not enforceable and was never enforced: 106 legitimate occurrences exist in dashboard/UI code (`cliEndpointMatch.js:8`, tool cards). The proxy URL literal rule targets the seed script only.
 
 ## 7. E2E scenarios
 
 1. Pool healthy, upstream 200 → single attempt, unchanged behaviour.
-2. Pool healthy, upstream 403 abuse ×N → retries with backoff → actionable terminal error.
-3. Pool configured but tunnel dead → probe fails fast → terminal error, **never direct**.
+2. Pool healthy, upstream 403 abuse ×3 → retries with backoff → actionable terminal error naming the pool.
+3. Pool configured but tunnel dead → probe fails fast → `EGRESS_PROXY_UNAVAILABLE`, **never direct**.
 4. No pool configured, direct 403 abuse → backoff → actionable terminal error.
-5. Fingerprint 403 → single attempt, no retry, clear message.
+5. Fingerprint 403 → one session eviction + one retry, no backoff loop.
 6. `strictProxy:true` + pool down → terminal error, no egress outside proxy.
+7. Pinned pool excluded after a fallbackable error, another active pool exists → that pool is used (proxy→proxy).
+8. Proxied egress-abuse 403 → exactly one upstream call, never a direct replay.
 
 ## 8. Open risks
 
 | Risk | Status |
 |---|---|
 | `response.clone()` multi-use | **RESOLVED** — body untouched until executor returns; `base.js:157` consumes nothing for opencode (no `computeRetryDelay`); handlers read once. Mirror `try/catch` from `opencode.js:135`. |
-| Settings write path | **RESOLVED** — no in-memory cache (`settingsRepo.js:69-73` reads SQLite every call). Old script failed on **path mismatch** + **wrong `rotateStrategy`** (see phase-03). |
+| Settings write path | **RESOLVED** — no in-memory cache (`settingsRepo.js:69-73` reads SQLite every call). Old script failed on **path mismatch** + **wrong `rotateStrategy`** (see Phase 07). |
 | Probe implementation shape | **RESOLVED** — Phase 03 landed a standalone SOCKS5 CONNECT handshake in `open-sse/utils/proxyHealth.js` (198 LOC) rather than extracting `proxyFetch.js:280-331`; that block's TLS wrapping is too entangled to import cleanly. Verified green 6/6. |
 | Upstream gate may never recover within a request | Accepted. Backoff only helps transient blocks; the actionable message is the real deliverable. |
-| Terminal status code | **DECIDED** — 403 with a rewritten `code` field. The Founder's directive is to keep the client-visible contract stable while making the body actionable. 503 was rejected: it invites client-side retry storms against a block that retrying cannot clear. |
+| Terminal status code | **DECIDED, and shipped differently than drafted** — status stays **403** (unchanged client contract), but the body is replaced wholesale by `{ error: { type: "FreeTierError", kind: "egress_abuse", message: buildEgressUnavailableMessage(ctx) } }` (`freeTierEgress.js:93-98`). No `code` field is rewritten. 503 was rejected: it invites client-side retry storms against a block that retrying cannot clear. |
 | Probe adds ≤3s on a dead pool, once per 30s TTL | Accepted; log it so operators see the TTL hit. |
 
 ### The flag is on the egress IP — proven, not inferred (2026-10-20)

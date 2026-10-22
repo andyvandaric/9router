@@ -1,6 +1,6 @@
 # Phase 06 — Client-facing terminal error
 
-**Status**: PROPOSED
+**Status**: ✅ Done (2026-10-22 12:18 (UTC+0700), Commit: `68d8b1bb`)
 **Author**: claude
 **Confidence**: 97%
 **Date**: 2026-10-20
@@ -8,6 +8,10 @@
 
 **Wave**: 3 | **Domain**: src/sse/handlers | **Files**: 1 source + 1 test
 **Depends on**: Phase 02, Phase 05 | **Unblocks**: none
+**Completed Date**: 2026-10-22 12:18 (UTC+0700)
+**Duration**: –
+**Completed in**: `68d8b1bb` — `open-sse/executors/opencode.js` (EDIT; co-touched `src/sse/services/auth.js`, `tests/unit/noauth-egress-resolution.test.js`, `tests/unit/noauth-proxy-fallback.test.js`, `tests/unit/opencode-egress-retry.test.js`)
+**Reconciled 2026-10-22**: file reconciled against live disk. DEVIATION from plan: the rewrite did NOT land in `src/sse/handlers/chat.js` — the file was never modified. It landed in `open-sse/executors/opencode.js` via `rewriteEgressRejection` from `open-sse/utils/freeTierEgress.js` (utility landed in `6886f112`, phase 01). Final body contract verified on live disk: `{ error: { type: "FreeTierError", kind: "egress_abuse", message: buildEgressUnavailableMessage(ctx) } }` with HTTP status preserved at **403** — 503 was explicitly rejected (it invites client-side retry storms). `grep -rn rewriteEgressRejection` confirms the only production call site is `open-sse/executors/opencode.js`; `freeTierEgress.js` defines the builder.
 
 ## Goal
 
@@ -15,7 +19,7 @@ After egress retries are exhausted the client receives an actionable message nam
 
 ## Files
 
-- `src/sse/handlers/chat.js` (EDIT exhaustion path ~241-260 and ~344-353)
+- `src/sse/handlers/chat.js` (EDIT exhaustion path ~241-260 and ~344-353) — **not executed as planned; see Reconciled note**
 - `tests/unit/noauth-egress-resolution.test.js` (extend — second `describe` block)
 
 ## Change

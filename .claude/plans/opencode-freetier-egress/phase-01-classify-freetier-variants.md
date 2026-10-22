@@ -1,6 +1,10 @@
 # Phase 01 — Classify the two FreeTierError variants
 
-**Status**: IN PROGRESS
+**Status:** ✅ Done (2026-10-22 11:42 (UTC+0700), Commit: 6886f112)
+**Completed Date:** 2026-10-22 11:42 (UTC+0700)
+**Duration:** ~2 days (Created records date only, no clock time — date-level precision)
+**Completed in**: Commit `6886f112` — `open-sse/utils/freeTierEgress.js` (NEW), `tests/unit/free-tier-egress-classify.test.js` (NEW)
+**Reconciled 2026-10-22**: Reconciled against live disk at 11:42 (UTC+0700). Deviation: `classifyFreeTierRejection`/`rewriteEgressRejection` shipped as `async` (awaited by callers), not the plan's synchronous signatures.
 **Author**: claude
 **Confidence**: 97%
 **Date**: 2026-10-20

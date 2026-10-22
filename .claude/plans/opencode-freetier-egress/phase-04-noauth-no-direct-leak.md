@@ -1,6 +1,10 @@
 # Phase 04 — noauth selection must never leak direct
 
-**Status**: PROPOSED
+**Status**: ✅ Done (2026-10-22 11:42 (UTC+0700), Commit: 68d8b1bb)
+**Completed Date:** 2026-10-22 11:42 (UTC+0700)
+**Duration:** ~2 days (Created records date only, no clock time — date-level precision)
+**Completed in**: Commit `68d8b1bb` — `src/sse/services/auth.js` (EDIT), `tests/unit/noauth-egress-resolution.test.js` (NEW)
+**Reconciled 2026-10-22**: Reconciled against live disk at 11:42 (UTC+0700). Layout drifted with the Phase 08 failover chain (both landed in `68d8b1bb`): the probe now sits in the `usingPool` branch at `auth.js:130-150` with `EGRESS_PROXY_UNAVAILABLE` built at `:110-121`, and the bare `noauth` direct path is kept for the no-pool case (`auth.js:104-107`) — target behaviour table holds; the `noauth` account is never written lock/cooldown state.
 **Author**: claude
 **Confidence**: 97%
 **Date**: 2026-10-20

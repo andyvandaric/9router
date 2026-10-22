@@ -1,6 +1,6 @@
 # Phase 08 — Pinned-pool failover (port of PR #5046)
 
-**Status**: PROPOSED
+**Status**: ✅ Done (2026-10-22 12:18 (UTC+0700), Commits: `8d2116ce`, `6ca7d389`, `af591a0d`)
 **Author**: claude
 **Confidence**: 97%
 **Date**: 2026-10-20
@@ -8,6 +8,10 @@
 
 **Wave**: 4 | **Domain**: src/sse/services | **Files**: 1 source (+ its test)
 **Depends on**: Phase 04, Phase 06 | **Unblocks**: none
+**Completed Date**: 2026-10-22 12:18 (UTC+0700)
+**Duration**: –
+**Completed in**: `8d2116ce` — `src/sse/services/auth.js` (EDIT) + NEW `tests/unit/noauth-pinned-pool-failover.test.js`. The same wave also landed `6ca7d389` (`open-sse/providers/registry/opencode.js`, `open-sse/providers/registry/opencode-zen.js` — declare `deepseek-v4.1-flash-free` / `deepseek-v4.1-flash` on the curated lanes) and `af591a0d` (`open-sse/providers/models/helpers.js` — keep the `deepseek-v4.1-*` ids on chat completions only, with `tests/unit/noauth-proxy-fallback.test.js` extended).
+**Reconciled 2026-10-22**: file reconciled against live disk. Landed in substance as planned; the only scope extension is the `deepseek-v4.1-*` model-id work done under the same phase-08 banner (registry + helpers + test), which the original phase file did not name.
 
 ## Goal
 
@@ -35,8 +39,8 @@ These agree. The rule is:
 
 ```
 if another active pool exists  → try it        (Phase 08)
-else                         → terminal error (Phase 04 / 06 renderer)
-never                        → direct
+else                          → terminal error (Phase 04 / 06 renderer)
+never                         → direct
 ```
 
 ## Note on the current deployment

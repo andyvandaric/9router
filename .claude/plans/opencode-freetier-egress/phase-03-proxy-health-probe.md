@@ -1,6 +1,10 @@
 # Phase 03 — Proxy liveness probe (hangs are the failure mode)
 
-**Status**: IN PROGRESS
+**Status**: ✅ Done (2026-10-22 11:42 (UTC+0700), Commit: 6886f112)
+**Completed Date:** 2026-10-22 11:42 (UTC+0700)
+**Duration:** ~2 days (Created records date only, no clock time — date-level precision)
+**Completed in**: Commit `6886f112` — `open-sse/utils/proxyHealth.js` (NEW, ~198 LOC), `tests/unit/proxy-health-probe.test.js` (NEW)
+**Reconciled 2026-10-22**: Reconciled against live disk at 11:42 (UTC+0700). Deviation: the SOCKS5 CONNECT dial was extracted into a standalone module (`probeProxyEgress` at `proxyHealth.js:179`) with its own greeting/CONNECT stages and fail-open contract, rather than reusing the TLS-entangled block at `proxyFetch.js:280-331` — the plan's "only extract if too entangled" condition was met (that block wraps TLS 6/6 through SOCKS).
 **Author**: claude
 **Confidence**: 97%
 **Date**: 2026-10-20
