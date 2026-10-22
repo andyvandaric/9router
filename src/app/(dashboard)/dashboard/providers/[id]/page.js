@@ -26,6 +26,7 @@ import BulkImportGrokCliModal from "./BulkImportGrokCliModal";
 import CustomConfigCard from "./CustomConfigCard";
 import AutoPingScheduleModal from "./AutoPingScheduleModal";
 import { getScheduleSlotLabels } from "@/shared/services/quotaPingSchedule";
+import { mergeProviderStrategy } from "@/shared/providerStrategies";
 
 const ONE_BY_ONE_DELAY_MS = 1000;
 
@@ -383,19 +384,16 @@ export default function ProviderDetailPage() {
       const settingsData = settingsRes.ok ? await settingsRes.json() : {};
       const current = settingsData.providerStrategies || {};
 
-      // Build override: null strategy means remove override, use global
-      const override = {};
-      if (strategy) override.fallbackStrategy = strategy;
-      if (strategy === "round-robin" && stickyLimit !== "") {
-        override.stickyRoundRobinLimit = Number(stickyLimit) || 3;
-      }
+      // Build override: null strategy means remove override, use global.
+      // Only the fallback-strategy group is owned here — the no-auth proxy
+      // group (proxyPoolId/rotateStrategy) must survive this save.
+      const override = {
+        fallbackStrategy: strategy ? strategy : undefined,
+        stickyRoundRobinLimit:
+          strategy === "round-robin" && stickyLimit !== "" ? Number(stickyLimit) || 3 : undefined,
+      };
 
-      const updated = { ...current };
-      if (Object.keys(override).length === 0) {
-        delete updated[providerId];
-      } else {
-        updated[providerId] = override;
-      }
+      const updated = mergeProviderStrategy(current, providerId, override);
 
       await fetch("/api/settings", {
         method: "PATCH",

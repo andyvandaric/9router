@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { getStatusVariant as getConnectionStatusVariant } from "@/shared/utils/connectionStatus";
 import PropTypes from "prop-types";
 import { Card, Badge, Button, Modal, Select, Toggle, EditConnectionModal, ConfirmModal } from "@/shared/components";
+import { mergeProviderStrategy } from "@/shared/providerStrategies";
 
 // ── CooldownTimer ──────────────────────────────────────────────
 function CooldownTimer({ until }) {
@@ -332,12 +333,14 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
       const res = await fetch("/api/settings", { cache: "no-store" });
       const data = res.ok ? await res.json() : {};
       const current = data.providerStrategies || {};
-      const override = {};
-      if (strategy) override.fallbackStrategy = strategy;
-      if (strategy === "round-robin" && stickyLimit !== "") override.stickyRoundRobinLimit = Number(stickyLimit) || 3;
-      const updated = { ...current };
-      if (Object.keys(override).length === 0) delete updated[providerId];
-      else updated[providerId] = override;
+      // Only the fallback-strategy group is owned here — the no-auth proxy
+      // group (proxyPoolId/rotateStrategy) must survive this save.
+      const override = {
+        fallbackStrategy: strategy ? strategy : undefined,
+        stickyRoundRobinLimit:
+          strategy === "round-robin" && stickyLimit !== "" ? Number(stickyLimit) || 3 : undefined,
+      };
+      const updated = mergeProviderStrategy(current, providerId, override);
       await fetch("/api/settings", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ providerStrategies: updated }) });
     } catch (e) { console.log("saveStrategy error:", e); }
   };
