@@ -39,10 +39,9 @@ describe("provider baseUrl const (full path, no trailing slash)", () => {
   });
 });
 
-describe("antigravity retry (const guard: live defaults)", () => {
-  // Historical note: an older fork patch forced 429=6, but the effective
-  // default at both pre- and post-v0.5.104-merge HEAD is attempts:3.
-  // This guard witnesses the live values so a silent retry-policy change fails fast.
+// 429 was 6 after the June registry migration; the maintainer lowered it to 3 in
+// 3f9382de ("Fix AG, Kiro, Xiaomi Provider"); it has been 3 since.
+describe("antigravity retry (429=3, 503=3)", () => {
   it("429 attempts = 3", () => {
     expect(antigravity.transport.retry["429"].attempts).toBe(3);
   });

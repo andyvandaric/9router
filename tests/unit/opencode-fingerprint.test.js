@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  applyEnvFingerprint,
   applyFingerprintTools,
   concealFingerprintToolNames,
   appendMissingFingerprintTools,
@@ -53,7 +54,10 @@ describe("opencodeFingerprint — request side", () => {
     const map = applyFingerprintTools(body, true);
     expect(namesOf(body.tools)).toEqual(OPENCODE_FINGERPRINT_TOOLS);
     expect(map.size).toBe(0);
-    expect(body.instructions).toBeUndefined();
+    // No placeholder note when the caller already declared the exact definitions;
+    // the environment marker is still appended on every free-lane request.
+    expect(body.instructions).not.toContain("placeholder");
+    expect(body.instructions).toContain("<env>");
   });
 
   it("drops duplicate declarations of one fingerprint name", () => {
@@ -113,6 +117,46 @@ describe("opencodeFingerprint — request side", () => {
     expect(takeRenamedToolNames(body)).toBe(map);
   });
 
+  it("aliases a declared tool name containing \"terminal\" (free-tier gate, #5319)", () => {
+    const body = { tools: chat(["read_file", "terminal", "write_file"]) };
+    const map = applyFingerprintTools(body, false);
+    const sent = namesOf(body.tools);
+    expect(sent.some((name) => /terminal/i.test(name))).toBe(false);
+    expect(sent).toContain("run_command");
+    expect(map.get("run_command")).toBe("terminal");
+    // The caller's own names survive; only the gated one moved.
+    expect(sent).toContain("read_file");
+    expect(sent).toContain("write_file");
+  });
+
+  it("gates on the substring, so every case and prefix variant is aliased", () => {
+    const body = { tools: chat(["Terminal", "my_terminal_thing", "terminals", "shell"]) };
+    applyFingerprintTools(body, false);
+    const sent = namesOf(body.tools);
+    expect(sent.filter((name) => /terminal/i.test(name))).toEqual([]);
+    expect(sent).toContain("shell");
+  });
+
+  it("restores the gated name on the response and aliases its history calls", () => {
+    const body = {
+      tools: chat(["terminal"]),
+      tool_choice: { type: "function", function: { name: "terminal" } },
+      messages: [
+        { role: "assistant", content: "", tool_calls: [{ id: "c1", type: "function", function: { name: "terminal", arguments: "{}" } }] },
+        { role: "tool", tool_call_id: "c1", content: "ok" },
+      ],
+    };
+    const map = applyFingerprintTools(body, false);
+    expect(body.tool_choice.function.name).toBe("run_command");
+    const call = body.messages.flatMap((m) => m.tool_calls ?? []).find((c) => c.id === "c1");
+    expect(call.function.name).toBe("run_command");
+    const restored = restoreToolNames(
+      { choices: [{ message: { tool_calls: [{ id: "c2", type: "function", function: { name: "run_command", arguments: "{}" } }] } }] },
+      map,
+    );
+    expect(restored.choices[0].message.tool_calls[0].function.name).toBe("terminal");
+  });
+
   it("never throws on malformed tools", () => {
     for (const tools of [null, undefined, "nope", [null, 42, []], [{}, { name: "" }]]) {
       expect(() => concealFingerprintToolNames(tools)).not.toThrow();
@@ -155,10 +199,12 @@ describe("opencodeFingerprint — in-place normalization", () => {
     expect(namesOf(body.tools)).toEqual(["shell", "Edit", "read"]);
     expect(map.size).toBe(0);
     expect(takeRenamedToolNames(body)).toBeNull();
+    // Only the genuinely absent `read` is still advertised as a placeholder; the
+    // CLI's <env> marker rides along on the same instructions field.
+    expect(body.instructions).toContain("Do not call the `read` tool; it is a placeholder that does nothing.");
+    expect(body.instructions).toContain("<env>");
     expect(body.tools[0].description).toContain("Commands run on Linux using bash.");
     expect(body.tools[0].parameters.required).toEqual(["command"]);
-    // Only the genuinely absent `read` is still advertised as a placeholder.
-    expect(body.instructions).toBe("Do not call the `read` tool; it is a placeholder that does nothing. Use the other tools you have been given instead.");
   });
 
   it("normalizes the nested chat shape without adding a system note", () => {
@@ -307,6 +353,54 @@ describe("opencodeFingerprint — response side", () => {
   it("leaves unknown tool names untouched", () => {
     const body = { output: [{ type: "function_call", name: "Edit" }] };
     expect(restoreToolNames(body, map).output[0].name).toBe("Edit");
+  });
+});
+
+// The upstream free tier answers 429 FreeUsageLimitError unless the system
+// prompt carries the CLI's `<env>` block AND the body declares tools. Both
+// halves are required; either one alone is refused (live probes 2026-10-26).
+describe("applyEnvFingerprint", () => {
+  it("appends the marker to a chat system message without replacing it", () => {
+    const body = { messages: [{ role: "system", content: "You are helpful." }, { role: "user", content: "hi" }] };
+    expect(applyEnvFingerprint(body, false)).toBe(true);
+    expect(body.messages[0].content).toContain("You are helpful.");
+    expect(body.messages[0].content).toContain("<env>");
+    expect(body.messages[0].content).toContain("Working directory:");
+  });
+
+  it("creates the system message when the body has none", () => {
+    const body = { messages: [{ role: "user", content: "hi" }] };
+    expect(applyEnvFingerprint(body, false)).toBe(true);
+    expect(body.messages[0].role).toBe("system");
+    expect(body.messages[0].content).toContain("<env>");
+  });
+
+  it("is idempotent when the marker is already present", () => {
+    const body = { messages: [{ role: "system", content: "x\n\n<env>\n</env>" }, { role: "user", content: "hi" }] };
+    expect(applyEnvFingerprint(body, false)).toBe(false);
+    expect(body.messages[0].content).toBe("x\n\n<env>\n</env>");
+  });
+
+  it("appends to Responses instructions", () => {
+    const body = { instructions: "Be terse." };
+    expect(applyEnvFingerprint(body, true)).toBe(true);
+    expect(body.instructions).toContain("Be terse.");
+    expect(body.instructions).toContain("<env>");
+  });
+
+  it("appends to a claude top-level system field instead of adding role:system", () => {
+    const body = { system: "Be terse.", messages: [{ role: "user", content: "hi" }] };
+    expect(applyEnvFingerprint(body, false, { claude: true })).toBe(true);
+    expect(body.system).toContain("Be terse.");
+    expect(body.system).toContain("<env>");
+    expect(body.messages).toHaveLength(1);
+  });
+
+  it("handles claude system held as text blocks", () => {
+    const body = { system: [{ type: "text", text: "Be terse." }], messages: [] };
+    expect(applyEnvFingerprint(body, false, { claude: true })).toBe(true);
+    expect(body.system[0].text).toContain("Be terse.");
+    expect(body.system[0].text).toContain("<env>");
   });
 });
 

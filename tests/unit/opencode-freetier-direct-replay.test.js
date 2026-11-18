@@ -49,11 +49,23 @@ const fetchMock = vi.fn();
 globalThis.fetch = fetchMock;
 
 // getDispatcher() imports undici lazily on the proxy path.
-vi.mock("undici", () => ({
-  Agent: class {},
-  ProxyAgent: class {},
-  Socks5ProxyAgent: class {},
-}));
+// fetch is mocked too: the direct path resolves fetch from undici as well, so
+// the fetch and the Agent/ProxyAgent classes come from the same copy.
+// Upstream attaches a direct Agent on every path now, so a recorded call only
+// counts as proxied when its dispatcher is a ProxyAgent/Socks5ProxyAgent —
+// strip the direct Agent to keep `opts.dispatcher` meaning "went via proxy".
+vi.mock("undici", () => {
+  class Agent {}
+  class ProxyAgent {}
+  class Socks5ProxyAgent {}
+  return {
+    Agent,
+    ProxyAgent,
+    Socks5ProxyAgent,
+    fetch: (url, opts = {}) =>
+      fetchMock(url, opts.dispatcher instanceof Agent ? { ...opts, dispatcher: undefined } : opts),
+  };
+});
 
 const { proxyAwareFetch } = await import("../../open-sse/utils/proxyFetch.js");
 

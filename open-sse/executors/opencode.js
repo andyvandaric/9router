@@ -9,6 +9,7 @@ import { isMuseSparkModel } from "../providers/models/helpers.js";
 import { applyFingerprintTools } from "../utils/opencodeFingerprint.js";
 import { FREETIER_KIND, classifyFreeTierRejection, rewriteEgressRejection } from "../utils/freeTierEgress.js";
 import { getQuotaCooldown } from "../services/accountFallback.js";
+import { opencodeTlsFetch } from "../services/opencodeTlsClient.js";
 import { ANTHROPIC_API_VERSION } from "../providers/shared.js";
 import {
   normalizeResponsesInput,
@@ -30,6 +31,54 @@ const BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuv
 // Bounded retries for an egress-reputation block. More attempts cannot help a
 // flagged address, and each one waits getQuotaCooldown(attempt) milliseconds.
 const MAX_EGRESS_ATTEMPTS = 3;
+
+// Free-lane load shedding: total attempts (first try + retries) and backoff.
+// Live bursts last ~20 s (a request that kept failing for 8 s succeeded at 19 s),
+// so the schedule below covers 800+1600+2400+3200+4000*3 = ~20 s.
+const OPENCODE_OVERLOAD_ATTEMPTS = 8;
+const OPENCODE_OVERLOAD_BASE_MS = 800;
+const OPENCODE_OVERLOAD_MAX_MS = 4000;
+const OPENCODE_OVERLOAD_RE = /overloaded/i;
+// A 429 that names the per-IP free-usage quota. A fresh session id cannot clear
+// it, so it must not rotate (upstream's fix); an unclassified 429 still does.
+const OPENCODE_FREE_USAGE_RE = /FreeUsageLimitError|free usage limit/i;
+
+async function isFreeUsageRejection(response) {
+  try {
+    return OPENCODE_FREE_USAGE_RE.test(await response.clone().text());
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Classify a gated free-lane rejection:
+ * - "overload": transient 429 load shedding, worth retrying.
+ * - "session":  any other 429 (FreeUsageLimitError) or 403, which can mean the
+ *               session id itself is spent or flagged.
+ * - null:       anything else.
+ */
+async function classifyRejection(response) {
+  const status = response?.status;
+  if (status !== 429 && status !== 403) return null;
+  if (status === 403) return "session";
+  try {
+    // The body is the response stream; clone it so a non-retryable 429 is still
+    // delivered intact to the caller.
+    return OPENCODE_OVERLOAD_RE.test(await response.clone().text()) ? "overload" : "session";
+  } catch {
+    return "session";
+  }
+}
+
+function sleep(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    const onAbort = () => { clearTimeout(timer); resolve(); };
+    const timer = setTimeout(() => { signal?.removeEventListener?.("abort", onAbort); resolve(); }, ms);
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+  });
+}
 
 function hasValidOpencodeVersion(ua) {
   const m = String(ua || "").match(/^opencode\/[a-z0-9-]+\/(\d+)\.\d+\.\d+\/[a-z0-9-]+$/i);
@@ -58,7 +107,6 @@ function unstableRandom() {
 // Upstream decodes it and rejects a non-small counter with 403 FreeTierError
 // (live probes: counter 0–16 pass, >=100 fail), so the counter must stay real.
 const SESSION_PREFIX_MASK = (1n << 48n) - 1n;
-const SESSION_TIME_MASK = (1n << 36n) - 1n;
 
 function descendingTimeHex(time, counterValue) {
   return (~(BigInt(time) * 0x1000n + BigInt(counterValue)) & SESSION_PREFIX_MASK)
@@ -75,22 +123,40 @@ export function generateSessionId(timestamp = Date.now()) {
   return `ses_${descendingTimeHex(timestamp, counter)}${unstableRandom()}`;
 }
 
+// Upstream decodes the prefix timestamp and refuses sessions whose time is in
+// the future or older than the free-tier window (live probes 2026-10-26: a
+// Date.now() session passed 10/10 while digest-derived ones passed 1/10). A
+// digest is uniform over 2^36 ms, so most translated ids were refused even
+// though their shape matched. Mint with the current time and memoize per
+// conversation so a conversation keeps one stable, valid session.
+const translatedOpencodeSessions = new Map();
+const MAX_TRANSLATED_SESSIONS = 5000;
+const translatedSessionCleanup = setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of translatedOpencodeSessions) {
+    if (now - entry.lastUsed > MEMORY_CONFIG.sessionTtlMs) {
+      translatedOpencodeSessions.delete(key);
+    }
+  }
+}, MEMORY_CONFIG.sessionCleanupIntervalMs);
+if (translatedSessionCleanup.unref) translatedSessionCleanup.unref();
+
 export function translateSessionId(sessionId, clientTool = "") {
   if (typeof sessionId === "string" && OPENCODE_SESSION_RE.test(sessionId.trim())) {
     return sessionId.trim();
   }
-  const digest = crypto
-    .createHash("sha256")
-    .update(`opencode\0${clientTool || "generic"}\0${sessionId || ""}`)
-    .digest();
-  // Deterministic time field from the digest, counter pinned to 1 (what the CLI sends).
-  const time = BigInt(`0x${digest.subarray(0, 5).toString("hex")}`) & SESSION_TIME_MASK;
-  const timeHex = descendingTimeHex(time, 1);
-  let randomPart = "";
-  for (let i = 6; i < 20; i++) {
-    randomPart += BASE62_CHARS[digest[i] % 62];
+  const key = `${clientTool || "generic"}\0${sessionId || ""}`;
+  const existing = translatedOpencodeSessions.get(key);
+  if (existing) {
+    existing.lastUsed = Date.now();
+    return existing.sessionId;
   }
-  return `ses_${timeHex}${randomPart}`;
+  const translated = `ses_${descendingTimeHex(Date.now(), 1)}${unstableRandom()}`;
+  if (translatedOpencodeSessions.size >= MAX_TRANSLATED_SESSIONS) {
+    translatedOpencodeSessions.delete(translatedOpencodeSessions.keys().next().value);
+  }
+  translatedOpencodeSessions.set(key, { sessionId: translated, lastUsed: Date.now() });
+  return translated;
 }
 
 function normalizeSession(value) {
@@ -189,6 +255,25 @@ export function stableSessionId(credentials) {
   }
   stableOpencodeSessions.set(key, { sessionId, lastUsed: Date.now() });
   return sessionId;
+}
+
+// The memoized sessions above are never refreshed on failure, so once upstream
+// spends or flags one, every later request reuses it and fails the same way
+// until restart (#5559). Drop the rejected id so the next request mints a fresh
+// one. Match by value, not identity key: a concurrent request may already have
+// minted a replacement, which must survive.
+export function forgetOpencodeSession(sessionId) {
+  if (!sessionId) return false;
+  let removed = false;
+  for (const store of [stableOpencodeSessions, translatedOpencodeSessions]) {
+    for (const [key, entry] of store) {
+      if (entry.sessionId === sessionId) {
+        store.delete(key);
+        removed = true;
+      }
+    }
+  }
+  return removed;
 }
 
 function bodyHasSessionHints(body) {
@@ -361,6 +446,16 @@ function normalizeOpencodeReasoning(model, body) {
   delete body.reasoning_effort;
 }
 
+// Chat Completions lane: the free backend validates reasoning_effort against the
+// plain OpenAI enum (none|minimal|low|medium|high|xhigh|max) and answers 400
+// "Invalid option" for anything else — including "auto", which adaptive thinking
+// (Claude Code's thinking:{type:"adaptive"}) arrives as. Omitting the field lets
+// the upstream pick its own default, which is what adaptive means; same rationale
+// as the Responses path above, which rejects "unknown variant `auto`".
+function dropAdaptiveReasoningEffort(body) {
+  if (body?.reasoning_effort === "auto") delete body.reasoning_effort;
+}
+
 export class OpenCodeExecutor extends BaseExecutor {
   constructor() {
     super("opencode", PROVIDERS.opencode);
@@ -411,65 +506,116 @@ export class OpenCodeExecutor extends BaseExecutor {
       // non-empty tool arrays; skipping cloaking here triggers 403 FreeTierError.
       applyFingerprintTools(body, true);
     } else if (body && typeof body === "object") {
-      applyFingerprintTools(body, false);
+      dropAdaptiveReasoningEffort(body);
+      applyFingerprintTools(body, false, { claude: isMessagesModel(model || body?.model) });
     }
     return injectReasoningContent({ provider: this.provider, model, body });
   }
 
+  // The free gate keys on the TLS ClientHello, so a native Node fetch is refused
+  // no matter how faithful the body is. Route through the impersonating client
+  // and keep proxy handling on the existing path (proxyAwareFetch delegates to
+  // `directFetch` when no proxy is configured, and passes the resolved proxy
+  // URL through when one is). Fail-open: without wreq-js the request still goes
+  // out on native fetch instead of erroring here.
   async execute(args) {
+    const directFetch = (url, options, proxyUrl) => opencodeTlsFetch(url, {
+      method: options.method,
+      headers: options.headers,
+      body: options.body,
+    }, { signal: options.signal, proxyUrl });
+    // wreq-js tunnels the proxy itself; adapters that cannot must stay on undici.
+    directFetch.proxyCapable = true;
+
     let prepared = this.prepareRequestCredentials(args);
     let rotatedForRateLimit = false;
     let rotatedForFingerprint = false;
     let egressAttempt = 1;
 
-    for (;;) {
-      const result = await super.execute({ ...args, credentials: prepared });
-      if (prepared._opencodeSessionSource !== SESSION_SOURCE.stable) return result;
-      const response = result?.response;
-
-      // Upstream blackholes exactly one stable session while fresh sessions
-      // succeed (live probes 2026-10-17). A 429 keeps rotating as before: one
-      // eviction, one retry, the second result returned as-is.
-      if (response?.status === HTTP_STATUS.RATE_LIMITED) {
-        if (rotatedForRateLimit) return result;
-        rotatedForRateLimit = true;
-        evictStableSession(prepared);
-        prepared = this.prepareRequestCredentials(args);
-        continue;
-      }
-
-      // The gate answers a stale/exhausted session with the same 403
-      // FreeTierError as a bad client fingerprint (live probes 2026-10-17), so
-      // that variant is ambiguous: rotate the session once, then give up. Only
-      // the egress variant is separately retryable below.
-      const kind = await classifyFreeTierRejection(response);
-      if (kind === FREETIER_KIND.fingerprint) {
-        if (rotatedForFingerprint) return result;
-        rotatedForFingerprint = true;
-        evictStableSession(prepared);
-        prepared = this.prepareRequestCredentials(args);
-        continue;
-      }
-      if (kind !== FREETIER_KIND.egress) return result;
-
-      // A flagged egress address survives session rotation, so retry the same
-      // egress with bounded exponential backoff before surfacing a terminal,
-      // actionable error.
-      if (egressAttempt >= MAX_EGRESS_ATTEMPTS) {
-        return {
-          ...result,
-          response: await rewriteEgressRejection(response, {
-            provider: this.provider,
-            model: args?.model,
-            poolId: args?.proxyOptions?.proxyPoolId || null,
-          }),
-        };
-      }
-
+    // Only a session this server minted is ours to replace; native and derived
+    // ids are dictated by the caller and must pass through untouched.
+    const rotateSession = () => {
+      forgetOpencodeSession(prepared[SESSION_FIELD]);
       evictStableSession(prepared);
       prepared = this.prepareRequestCredentials(args);
-      if (await sleepUnlessAborted(getQuotaCooldown(egressAttempt), args?.signal)) return result;
-      egressAttempt++;
+    };
+
+    for (let attempt = 1; ; attempt++) {
+      const result = await super.execute({ ...args, credentials: prepared, directFetch });
+      const response = result?.response;
+      const canRotate = prepared._opencodeSessionSource === SESSION_SOURCE.stable;
+
+      // 1. Upstream's transient overload 429 ("The inference service is overloaded").
+      //    Retry with backoff; keep the same session across retries.
+      const rejection = await classifyRejection(response);
+      if (rejection === "overload") {
+        if (attempt >= OPENCODE_OVERLOAD_ATTEMPTS || args.signal?.aborted) return result;
+        response.body?.cancel?.().catch?.(() => {});
+        args.log?.debug?.("RETRY", `OpenCode free lane overloaded, retry ${attempt}/${OPENCODE_OVERLOAD_ATTEMPTS - 1}`);
+        const backoff = Math.min(OPENCODE_OVERLOAD_BASE_MS * attempt, OPENCODE_OVERLOAD_MAX_MS);
+        await sleep(backoff + Math.random() * 250, args.signal);
+        if (args.signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
+        continue;
+      }
+
+      // 2. Free-tier gate 403 (fingerprint / egress) — only for stable sessions.
+      //    The gate answers a stale/exhausted session with the same 403
+      //    FreeTierError as a bad client fingerprint (live probes 2026-10-17), so
+      //    that variant is ambiguous: rotate the session once, then give up. Only
+      //    the egress variant is separately retryable below.
+      const freeTierKind = await classifyFreeTierRejection(response);
+      if (freeTierKind === FREETIER_KIND.fingerprint) {
+        if (!canRotate) return result;
+        if (rotatedForFingerprint) return result;
+        rotatedForFingerprint = true;
+        rotateSession();
+        continue;
+      }
+
+      if (freeTierKind === FREETIER_KIND.egress) {
+        if (!canRotate) return result;
+        if (egressAttempt >= MAX_EGRESS_ATTEMPTS) {
+          return {
+            ...result,
+            response: await rewriteEgressRejection(response, {
+              provider: this.provider,
+              model: args?.model,
+              poolId: args?.proxyOptions?.proxyPoolId || null,
+            }),
+          };
+        }
+        rotateSession();
+        if (await sleepUnlessAborted(getQuotaCooldown(egressAttempt), args?.signal)) return result;
+        egressAttempt++;
+        continue;
+      }
+
+      // 3. Non-gate 429 / bare 403. A quota 429 (FreeUsageLimitError) is per-IP
+      //    and never cleared by a fresh session id: drop the minted id for the
+      //    next request (#5559) and return upstream's answer untouched
+      //    (upstream's fix). An unclassified 429 is the fork's original case —
+      //    upstream blackholes exactly one stable session while fresh sessions
+      //    succeed — so it rotates once. A bare 403 only drops the minted id.
+      //    Native/derived sessions belong to the caller and pass through.
+      if (rejection === "session") {
+        if (response?.status === HTTP_STATUS.RATE_LIMITED
+          && !(await isFreeUsageRejection(response))) {
+          if (!canRotate) return result;
+          if (rotatedForRateLimit) return result;
+          rotatedForRateLimit = true;
+          rotateSession();
+          continue;
+        }
+        // A client-supplied native session is not ours to replace; this only
+        // drops ids we minted, so the next request starts on a fresh one.
+        if (forgetOpencodeSession(prepared[SESSION_FIELD])) {
+          args.log?.debug?.("SESSION", `OpenCode ${response.status}: dropped cached session, next request re-mints`);
+        }
+        return result;
+      }
+
+      // 4. Anything else (200, non-gate 403, 500, etc.) — return untouched.
+      return result;
     }
   }
 

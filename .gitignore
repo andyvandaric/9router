@@ -105,3 +105,4 @@ debug.log
 # merge/patch residue from build utilities
 *.orig
 *.rej
+.scratch/
