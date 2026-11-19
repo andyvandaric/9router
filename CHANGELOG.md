@@ -1,3 +1,18 @@
+# v0.5.120-andyvandaric-patch (2026-11-19, fork)
+
+## Fixes
+- **Antigravity**: a bare `429 RESOURCE_EXHAUSTED` with no `details[]` is a refusal of the request body (fingerprinted third-party system text), not account quota. It used to be retried three times, counted as strikes, and end in a 15-minute `CACHE_BLOCK` while quota sat near 100%. The gateway now reads the error body on the DNS-bypass transport (which has no `clone()`), classifies the refusal, retries once with `systemInstruction` moved into the first user turn, and otherwise answers a request-scoped 400 so the account is never locked. Registry 429 attempts drop from 3 to 0; the executor owns the policy.
+- **Antigravity**: the successful branch of that retry used to strand its own 200. The classifier read every retried body, and reading drains the clone-less transport, so `nonStreamingHandler` got an empty body, locked a healthy account for 30s and answered 503. Found by a live run; the read is now gated on the retryable status set.
+- **Antigravity**: identity parity with the live IDE. The version pin moves to `2.33.0` (live Hub manifest, 2026-11-19) and lives in exactly one place — the CJS MITM module, imported by the ESM provider layer instead of duplicated. The MITM rewrite no longer flattens `antigravity/hub/<v> darwin/arm64` into `antigravity/<v>`: it preserves both the `hub/` segment and the platform suffix, and accepts the bare shape too.
+- **Antigravity**: streaming calls now send `Accept: text/event-stream`. The executor's `buildHeaders` override returns early and never reached the base's conditional, so every streaming request went out without it.
+- **Antigravity**: the `/opencode/gi` prompt rewrite no longer corrupts identifiers such as `skill_view(name='opencode-agent')`; the rewrite list also covers the Claude Code SDK sentence, the bare Claude Code line, OpenClaw and Hermes.
+- **CLI**: `cli:pack` no longer ships `app/cli/.build-home`. The Next build stages a throwaway `HOME`/`USERPROFILE` there, and `!app/` in `.npmignore` re-included it, so every release tarball carried the builder's machine-id plus an empty-schema sqlite and a throwaway jwt-secret. Excluded in `package.json` `files` (7 files → 0); `npm run cli:pack` is unaffected otherwise.
+
+## Notes
+- Verified live on an isolated instance (separate port, separate `DATA_DIR`, real account, real upstream): prompt refusal → 429 → system text moved → 200 on five consecutive runs, zero `CACHE_BLOCK`, account state clean. The running install on the default port was untouched throughout.
+- The `hub/` segment is **not** proven to control quota visibility — an A/B on `retrieveUserQuotaSummary` returned identical buckets for all three UA shapes. The identity change is justified on fidelity alone.
+- Real quota exhaustion still locks and fails over exactly as before; that path was not exercised (it would burn a live allowance) and is covered by unit tests only.
+
 # v0.5.119 (2026-11-11)
 
 ## Features

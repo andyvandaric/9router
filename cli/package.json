@@ -1,6 +1,6 @@
 {
   "name": "9router",
-  "version": "0.5.119",
+  "version": "0.5.120",
   "description": "9Router CLI - Start and manage 9Router server",
   "bin": {
     "9router": "./cli.js"
@@ -10,6 +10,7 @@
     "src",
     "hooks",
     "app",
+    "!app/cli/.build-home",
     "README.md",
     "LICENSE"
   ],
