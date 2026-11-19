@@ -167,3 +167,54 @@ describe("antigravity registry retry budget", () => {
     expect(antigravityRegistry.transport.retry["503"].attempts).toBe(3);
   });
 });
+
+// The live transport for Antigravity is the DNS-bypass path, which hands back a
+// plain object with no clone(). Reading that object drains it. The execute
+// override reads every 429 body to classify it, so it must never touch a body
+// it is about to hand back for parsing — a successful retry's 200 would reach
+// nonStreamingHandler already empty.
+function bypassResponse(status, body) {
+  const state = { reads: 0 };
+  const response = {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: "",
+    headers: new Map(),
+    text: async () => {
+      state.reads += 1;
+      return body;
+    },
+    json: async () => JSON.parse(await response.text()),
+  };
+  return { response, state };
+}
+
+describe("antigravity execute override — clone-less transport", () => {
+  it("leaves a successful retry's body unread for the response parser", async () => {
+    const executor = new AntigravityExecutor();
+    const successBody = JSON.stringify({ candidates: [{ content: { parts: [{ text: "OK" }] } }] });
+    const first = bypassResponse(429, JSON.stringify(BARE_REJECTION));
+    const second = bypassResponse(200, successBody);
+    fetchMock.mockResolvedValueOnce(first.response).mockResolvedValueOnce(second.response);
+
+    const result = await run(executor);
+
+    expect(result.response.status).toBe(200);
+    expect(second.state.reads).toBe(0);
+    expect(await result.response.text()).toBe(successBody);
+  });
+
+  it("still classifies the retry when the retry itself is another bare rejection", async () => {
+    const executor = new AntigravityExecutor();
+    const first = bypassResponse(429, JSON.stringify(BARE_REJECTION));
+    const second = bypassResponse(429, JSON.stringify(BARE_REJECTION));
+    fetchMock.mockResolvedValueOnce(first.response).mockResolvedValueOnce(second.response);
+
+    const result = await run(executor);
+
+    expect(result.response.status).toBe(429);
+    const parsed = await executor.parseError(result.response, "");
+    expect(parsed.status).toBe(400);
+    expect(parsed.message).toBe(ANTIGRAVITY_PROMPT_REJECTED_MESSAGE);
+  });
+});

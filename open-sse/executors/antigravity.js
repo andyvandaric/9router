@@ -234,6 +234,8 @@ export class AntigravityExecutor extends BaseExecutor {
     if (!movedBody) return result;
 
     const retried = await super.execute({ ...args, body: movedBody });
+    if (!ANTIGRAVITY_RETRYABLE_QUOTA_STATUSES.has(retried.response.status)) return retried;
+
     const retriedBody = await readBodyText(retried.response);
     if (!isAntigravityPromptRejection(retried.response.status, retriedBody)) return retried;
 
