@@ -26,7 +26,9 @@ export default {
     },
     retry: {
       "429": {
-        attempts: 3,
+        // 429s need classification before retry (prompt rejection vs quota vs
+        // overload), so the registry retries none and the executor owns the policy.
+        attempts: 0,
       },
       "500": {
         attempts: 3,

@@ -19,8 +19,28 @@ function sanitizeFunctionName(name) {
 
 const MAX_RETRY_AFTER_MS = 10000;
 const ANTIGRAVITY_TRANSIENT_RETRY_MAX_MS = 15000;
+// With registry 429 attempts at 0, the override owns 429 retries. Two attempts
+// keep the per-request ceiling at three upstream calls even when the
+// prompt-rejection probe already spent one.
+const ANTIGRAVITY_EXECUTE_RETRY_ATTEMPTS = 2;
+
+export const ANTIGRAVITY_PROMPT_REJECTED_MESSAGE =
+  "Antigravity rejected this request because of its system prompt — this is not your quota. "
+  + "Antigravity refuses certain third-party agent text inside system prompts. The gateway "
+  + "rewrites the known strings, but this prompt still contains text it refuses. Retry with a "
+  + "different client or model.";
 const MAX_ANTIGRAVITY_OUTPUT_TOKENS = 64000;
 const ANTIGRAVITY_IDE_REQUEST_ID_RE = /^agent\/[^/]+\/\d+\/[^/]+\/\d+$/;
+
+// chat.js treats 409 exactly like 429 for the quota path, so the classifier must too.
+const HTTP_STATUS_CONFLICT = 409;
+const ANTIGRAVITY_PROMPT_REJECTION_STATUSES = new Set([HTTP_STATUS.RATE_LIMITED, HTTP_STATUS_CONFLICT]);
+const ANTIGRAVITY_RETRYABLE_QUOTA_STATUSES = ANTIGRAVITY_PROMPT_REJECTION_STATUSES;
+const ANTIGRAVITY_BARE_EXHAUSTED_MESSAGE = /^Resource has been exhausted \(e\.g\. check quota\)\.?$/;
+
+// Responses that exhausted the prompt-rejection probe, so parseError can turn
+// them into a request-scoped 400 without re-reading the body.
+const promptRejectionExhausted = new WeakSet();
 
 const ANTIGRAVITY_TRANSIENT_ERROR_PATTERNS = [
   /high\s+traffic/i,
@@ -89,6 +109,86 @@ function parseImageConfig(model) {
   return config;
 }
 
+// The DNS-bypass transport returns a plain object with no clone(), and its
+// text() drains the stream, so the retry hook and the error parser must share
+// one read. Returns the body text; never mutates the response.
+const bodyTextMemo = new WeakMap();
+
+export function readBodyText(response) {
+  if (!response) return Promise.resolve("");
+
+  if (typeof response.clone === "function") {
+    try {
+      return Promise.resolve(response.clone().text()).catch(() => "");
+    } catch {
+      return Promise.resolve("");
+    }
+  }
+
+  const memoised = bodyTextMemo.get(response);
+  if (memoised) return memoised;
+
+  const pending = Promise.resolve()
+    .then(() => response.text())
+    .catch(() => "");
+  bodyTextMemo.set(response, pending);
+  return pending;
+}
+
+// A bare RESOURCE_EXHAUSTED with no details is a request-scoped prompt refusal:
+// Google fingerprints the systemInstruction, not the account. Keeping the match
+// this narrow is what makes the downgrade to 400 safe — any details[] means
+// genuine quota and keeps the existing account-fallback path.
+export function isAntigravityPromptRejection(status, bodyText) {
+  if (!ANTIGRAVITY_PROMPT_REJECTION_STATUSES.has(status)) return false;
+
+  let parsed = bodyText;
+  if (typeof bodyText === "string") {
+    try {
+      parsed = JSON.parse(bodyText);
+    } catch {
+      return false;
+    }
+  }
+
+  const error = parsed?.error;
+  if (!error || error.status !== "RESOURCE_EXHAUSTED") return false;
+  if (typeof error.message !== "string" || !ANTIGRAVITY_BARE_EXHAUSTED_MESSAGE.test(error.message)) {
+    return false;
+  }
+
+  return !Array.isArray(error.details) || error.details.length === 0;
+}
+
+function collectSystemTexts(systemInstruction) {
+  const parts = Array.isArray(systemInstruction?.parts) ? systemInstruction.parts : [];
+  return parts.map(part => part?.text).filter(text => typeof text === "string" && text !== "");
+}
+
+// Antigravity fingerprints systemInstruction only: the same text inside a user
+// turn passes. Returns a copy with the system parts moved to the front of the
+// first user turn, or null when there is nothing to move.
+export function moveSystemInstructionToContents(body) {
+  const request = body?.request;
+  const systemTexts = collectSystemTexts(request?.systemInstruction);
+  if (systemTexts.length === 0) return null;
+
+  const contents = Array.isArray(request?.contents) ? request.contents : [];
+  const firstUserIndex = contents.findIndex(turn => turn?.role === "user");
+  if (firstUserIndex < 0) return null;
+
+  const movedParts = systemTexts.map(text => ({ text }));
+  const nextContents = contents.map((turn, index) => {
+    if (index !== firstUserIndex) return turn;
+    const existingParts = Array.isArray(turn.parts) ? turn.parts : [];
+    return { ...turn, parts: [...movedParts, ...existingParts] };
+  });
+
+  const nextRequest = { ...request, contents: nextContents };
+  delete nextRequest.systemInstruction;
+  return { ...body, request: nextRequest };
+}
+
 function uuidFromSeed(seed) {
   const bytes = crypto.createHash("sha256").update(String(seed || "antigravity")).digest().subarray(0, 16);
   bytes[6] = (bytes[6] & 0x0f) | 0x50;
@@ -115,11 +215,90 @@ export class AntigravityExecutor extends BaseExecutor {
     super("antigravity", PROVIDERS.antigravity);
   }
 
-  // Parse Antigravity quota error to extract precise resetsAtMs from ErrorInfo/RetryInfo
-  parseError(response, bodyText) {
-    if ((response.status === 429 || response.status === 409) && bodyText) {
+  // 429 policy lives here because the registry declares attempts: 0 — the base
+  // retry loop returns before it can classify anything. Three shapes, in order:
+  // prompt rejection (one retry with the system text moved), genuine quota
+  // (no retry, account fallback owns it), transient overload (small budget).
+  async execute(args) {
+    const result = await super.execute(args);
+    if (!ANTIGRAVITY_RETRYABLE_QUOTA_STATUSES.has(result.response.status)) return result;
+
+    const bodyText = await readBodyText(result.response);
+    if (!isAntigravityPromptRejection(result.response.status, bodyText)) {
+      return this.retryTransientQuota(args, result, bodyText);
+    }
+
+    if (isImageModel(args.model)) return result;
+
+    const movedBody = moveSystemInstructionToContents(args.body);
+    if (!movedBody) return result;
+
+    const retried = await super.execute({ ...args, body: movedBody });
+    const retriedBody = await readBodyText(retried.response);
+    if (!isAntigravityPromptRejection(retried.response.status, retriedBody)) return retried;
+
+    // Two bare refusals after changing the one field Antigravity fingerprints
+    // is a body problem, not quota. Mark the response so parseError downgrades
+    // it to a request-scoped 400 instead of entering the account lock path.
+    promptRejectionExhausted.add(retried.response);
+    const connectionName = args.credentials?.connectionName || args.credentials?.connectionId || "unknown";
+    args.log?.warn?.("ANTIGRAVITY", `prompt rejection on ${args.model} (conn=${connectionName}) — downgrading to 400`);
+    return retried;
+  }
+
+  // What attempts: 3 used to absorb now that the base loop no longer runs on
+  // 429: overload/capacity shapes and a short Retry-After, capped at two
+  // attempts so the per-request ceiling stays at three upstream calls.
+  async retryTransientQuota(args, result, bodyText) {
+    if (this.hasQuotaResetDetail(bodyText)) return result;
+
+    let current = result;
+    let currentBody = bodyText;
+    for (let attempt = 1; attempt <= ANTIGRAVITY_EXECUTE_RETRY_ATTEMPTS; attempt++) {
+      if (!this.isTransientQuotaResponse(current.response, currentBody)) return current;
+
+      const delayMs = await this.computeRetryDelay(current.response, attempt);
+      if (delayMs === false || delayMs == null) return current;
+
+      args.log?.debug?.("RETRY", `antigravity transient ${current.response.status} retry ${attempt}/${ANTIGRAVITY_EXECUTE_RETRY_ATTEMPTS} after ${delayMs / 1000}s`);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+
+      current = await super.execute(args);
+      if (!ANTIGRAVITY_RETRYABLE_QUOTA_STATUSES.has(current.response.status)) return current;
+      currentBody = await readBodyText(current.response);
+      if (isAntigravityPromptRejection(current.response.status, currentBody)) return current;
+    }
+    return current;
+  }
+
+  hasQuotaResetDetail(bodyText) {
+    try {
+      const details = JSON.parse(bodyText)?.error?.details;
+      return Array.isArray(details) && details.length > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  isTransientQuotaResponse(response, bodyText) {
+    const retryAfterMs = this.parseRetryHeaders(response.headers);
+    if (retryAfterMs != null && retryAfterMs <= MAX_RETRY_AFTER_MS) return true;
+    return ANTIGRAVITY_TRANSIENT_ERROR_PATTERNS.some(pattern => pattern.test(bodyText || ""));
+  }
+
+  // Parse Antigravity quota error to extract precise resetsAtMs from ErrorInfo/RetryInfo.
+  // Async because the bypass transport's stream may already be drained by the retry
+  // hook — readBodyText returns that memoised read.
+  async parseError(response, bodyText) {
+    // Only a response that already survived the one system-text retry is a
+    // prompt rejection; an unmarked 429 is genuine quota and keeps its 429.
+    if (promptRejectionExhausted.has(response)) {
+      return { status: HTTP_STATUS.BAD_REQUEST, message: ANTIGRAVITY_PROMPT_REJECTED_MESSAGE };
+    }
+    const body = (await readBodyText(response)) || bodyText;
+    if ((response.status === 429 || response.status === 409) && body) {
       try {
-        const json = JSON.parse(bodyText);
+        const json = JSON.parse(body);
         const err = json?.error;
         let resetsAtMs = null;
         const details = Array.isArray(err?.details) ? err.details : [];
@@ -143,11 +322,11 @@ export class AntigravityExecutor extends BaseExecutor {
           }
         }
         if (resetsAtMs) {
-          return { status: response.status, message: err?.message || bodyText, resetsAtMs };
+          return { status: response.status, message: err?.message || body, resetsAtMs };
         }
       } catch { /* fall through to default */ }
     }
-    return super.parseError(response, bodyText);
+    return super.parseError(response, body);
   }
 
   buildUrl(model, stream, urlIndex = 0) {
@@ -162,11 +341,14 @@ export class AntigravityExecutor extends BaseExecutor {
   // sessionId comes from transformRequest output; base.execute runs transformRequest before
   // buildHeaders, so we read it from instance state cached there (fallback: explicit arg).
   buildHeaders(credentials, stream = true, sessionId = null) {
-    return {
+    const headers = {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${credentials.accessToken}`,
       "User-Agent": this.config.headers?.["User-Agent"] || ANTIGRAVITY_HEADERS["User-Agent"],
     };
+    // This override returns early, so it must re-add what BaseExecutor adds.
+    if (stream) headers["Accept"] = "text/event-stream";
+    return headers;
   }
 
   transformRequest(model, body, stream, credentials) {
@@ -462,8 +644,8 @@ export class AntigravityExecutor extends BaseExecutor {
     let errorJson = null;
     let retryMs = this.parseRetryHeaders(response.headers);
 
+    bodyText = await readBodyText(response);
     try {
-      bodyText = await response.clone().text();
       errorJson = bodyText ? JSON.parse(bodyText) : null;
     } catch {
       // ignore parse errors → fall through to status/message based retry

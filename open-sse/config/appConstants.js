@@ -182,19 +182,48 @@ export const LOAD_CODE_ASSIST_METADATA = {
 
 // System prompts
 export const CLAUDE_SYSTEM_PROMPT = "You are Claude Code, Anthropic's official CLI for Claude.";
+// Identity line substituted for fingerprinted third-party agent branding. The real
+// Antigravity client sends this; a competing client's identity line triggers a bare
+// 429 RESOURCE_EXHAUSTED even when the account still has quota.
+export const ANTIGRAVITY_DEFAULT_SYSTEM = "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.**Absolute paths only****Proactiveness**";
+
 // Rewrite rules applied to Antigravity system prompts: competing-client branding
 // makes the backend flag the request and answer 429 Quota Exhausted.
+//
+// ORDER MATTERS: longest form first, bare phrase last. A short pattern running
+// early would eat the tail of a longer sentence before the longer pattern could
+// match it. The `opencode` catch-all stays last for the same reason — it is the
+// broadest rule and must only see text the specific rules did not claim.
 export const ANTIGRAVITY_PROMPT_REWRITES = [
-  { from: "You are a Claude agent, built on Anthropic's Claude Agent SDK.", to: "" },
-  { from: /You are Hermes(?: Agent)?(?:,\s*(?:an intelligent AI assistant|an AI assistant|an AI agent))?(?:,?\s*(?:built|created)\s+by\s+Nous Research)?\./gi, to: "You are an AI assistant." },
+  // Claude Code: full SDK sentence, then the bare identity line.
+  { from: /You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK\./gi, to: ANTIGRAVITY_DEFAULT_SYSTEM },
+  { from: /You are a Claude agent, built on Anthropic's Claude Agent SDK\./gi, to: ANTIGRAVITY_DEFAULT_SYSTEM },
+  { from: /^You are Claude Code\.?[ \t]*$/gim, to: ANTIGRAVITY_DEFAULT_SYSTEM },
+  // OpenClaw identity header line.
+  { from: /^You are OpenClaw\b[^\n]*$/gim, to: ANTIGRAVITY_DEFAULT_SYSTEM },
+  // Hermes: runtime-environment block marker, directness sentence, identity sentence.
+  { from: /^[ \t]*#[ \t]*Hermes runtime environment[^\n]*(?:\r?\n)*/gim, to: "" },
+  { from: /Be direct: match the length of your reply to the weight of the ask\./g, to: ANTIGRAVITY_DEFAULT_SYSTEM },
+  { from: /You are Hermes(?: Agent)?(?:,\s*(?:an intelligent AI assistant|an AI assistant|an AI agent))?(?:,?\s*(?:built|created)\s+by\s+Nous Research)?\./gi, to: ANTIGRAVITY_DEFAULT_SYSTEM },
   // Claude Code prepends this line to its system prompt. The Claude-format translator strips it,
   // but OpenAI-format clients (e.g. proxies that convert Claude Code to /v1/chat/completions)
   // pass it through, and any system text containing it gets a fake 429 RESOURCE_EXHAUSTED.
   { from: /^x-anthropic-billing-header:[^\n]*(?:\r?\n)*/gim, to: "" },
-  { from: /opencode/gi, to: (m) => (m === "OpenCode" ? "Antigravity" : m === "OPENCODE" ? "ANTIGRAVITY" : "antigravity") }
+  // OpenCode catch-all. A bare /opencode/ would corrupt identifiers (skill names, tool
+  // names, paths), so a match sitting next to an identifier character is left untouched.
+  {
+    from: /opencode/gi,
+    to: (match, offset, wholeText) => {
+      const before = offset > 0 ? wholeText[offset - 1] : "";
+      const after = wholeText[offset + match.length] ?? "";
+      const isIdentifierChar = (char) => /[-_./'"]/.test(char) || /[A-Za-z0-9]/.test(char);
+      if (isIdentifierChar(before) || isIdentifierChar(after)) return match;
+      if (match === "OpenCode") return "Antigravity";
+      if (match === "OPENCODE") return "ANTIGRAVITY";
+      return "antigravity";
+    }
+  }
 ];
-
-export const ANTIGRAVITY_DEFAULT_SYSTEM = "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.**Absolute paths only****Proactiveness**";
 
 // Derive từ registry oauth.refreshLeadMs
 export const REFRESH_LEAD_MS = Object.fromEntries(
