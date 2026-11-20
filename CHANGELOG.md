@@ -5,7 +5,7 @@
 - **Security**: the previously published release asset (`9router-latest.tgz`, consumed by the README one-liner installers) bundled **next 16.4.3**, which is affected by the advisory. The fix landed on `master` at `334d5763` but never reached a release asset; this release ships the patched build to every one-liner installer. Verified by extracting `package.json` from the published tarball.
 
 ## Notes
-- Verification: `npm run build` exits 0 with zero `SecurityFatalError`; the advisory API reports `unaffected` for 16.4.6; Antigravity unit tests pass 33/33.
+- Verification: `npm run cli:pack` exits 0 with zero `SecurityFatalError`; the built tarball bundles next 16.4.6; the advisory resolver reports `unaffected`; the Antigravity suite passes 22 files / 172 tests (6 skipped).
 - `agentUpgrade: "security"` was considered and rejected as a no-op — `config-shared.js` already defaults to that value. The patch therefore stays dependency-only and `next.config.mjs` is unchanged.
 - Re-running the one-liner installer picks this up automatically; data in `~/.9router` is untouched.
 
