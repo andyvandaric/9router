@@ -57,6 +57,12 @@
 > 7. **VPSEase Proxy Pool untuk Free Tier OpenCode**:
 >    - *Problem*: Model-model OpenCode free (mis. `oc/deepseek-v4.1-flash-free`) tertolak `403 FreeTierError` — ini egress-reputation block (egress IP lokal ter-flag Cloudflare WAF), bukan masalah akun, karena free tier tidak membawa kredensial.
 >    - *Solution*: Tidak perlu setup manual di dalam 9router — VPSEase otomatis mengonfigurasi outbound proxy dengan PATCH `/api/settings` (`outboundProxyUrl`), dan `open-sse/utils/proxyFetch.js` menghormati setting tersebut. Langkah 9router-side bersifat OPSIONAL: bind pool proxy ke provider `opencode` via `node scripts/seed-opencode-proxy-pool.mjs` untuk mengaktifkan `strictProxy` (fail-closed: request yang ter-flag tidak pernah di-replay lewat egress direct, commit `a14ff01b`) dan failover multi-pool (commit `8d2116ce`). Script lama `scripts/setup-vpsease-proxy.mjs` sudah **DEPRECATED** dan menolak jalan.
+>
+> ---
+>
+> 🛡️ **Catatan keamanan terbaru — `v0.5.121-andyvandaric-patch`**
+> Tarball rilis sebelumnya ternyata masih membawa **Next.js 16.4.3** (versi yang terdampak security advisory). Mulai `v0.5.121-andyvandaric-patch`, build yang dipaketkan sudah memakai **Next.js 16.4.6** — patch dependency murni, tanpa perubahan kode, tanpa codemod.
+> Cukup **jalankan ulang installer one-liner** di atas; versi baru otomatis terpakai. Data dan DB Anda di `~/.9router` **tidak tersentuh**.
 
 ---
 

@@ -1,3 +1,14 @@
+# v0.5.121-andyvandaric-patch (2026-11-20, fork)
+
+## Fixes
+- **Security**: bump Next.js from `^16.4.2` to `^16.4.6`, `eslint-config-next` from `16.4.2` to `16.4.6`, and `@next/third-parties` from `^16.2.9` to `^16.4.6`. This is a patch bump — no codemods, no breaking API changes, no source edits.
+- **Security**: the previously published release asset (`9router-latest.tgz`, consumed by the README one-liner installers) bundled **next 16.4.3**, which is affected by the advisory. The fix landed on `master` at `334d5763` but never reached a release asset; this release ships the patched build to every one-liner installer. Verified by extracting `package.json` from the published tarball.
+
+## Notes
+- Verification: `npm run build` exits 0 with zero `SecurityFatalError`; the advisory API reports `unaffected` for 16.4.6; Antigravity unit tests pass 33/33.
+- `agentUpgrade: "security"` was considered and rejected as a no-op — `config-shared.js` already defaults to that value. The patch therefore stays dependency-only and `next.config.mjs` is unchanged.
+- Re-running the one-liner installer picks this up automatically; data in `~/.9router` is untouched.
+
 # v0.5.120-andyvandaric-patch (2026-11-19, fork)
 
 ## Fixes
