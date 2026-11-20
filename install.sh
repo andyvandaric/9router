@@ -21,7 +21,7 @@ Usage: install.sh [--version X.Y.Z] [--port 20128] [--no-start] [--url <tgz-url>
 
   --version X.Y.Z   Pin a fork-patch release (default: latest)
   --port N          Server port to start/restart on (default: 20128)
-  --no-start        Stop/upgrade only; do not start the service
+  --no-start        Install/upgrade only; do not start the server
   --url URL         Install directly from this tgz URL (overrides --version)
 EOF
   exit 0
@@ -30,6 +30,119 @@ EOF
 say()  { printf '==> %s\n' "$1"; }
 okay() { printf '    OK %s\n' "$1"; }
 warn() { printf '    !! %s\n' "$1" >&2; }
+
+# Listener discovery without lsof -------------------------------------------
+# lsof cannot see a leftover next-server: its comm is `next-server (v1` and the
+# unclosed paren breaks lsof's /proc name parse, so `lsof -ti tcp:$PORT` returns
+# nothing while the port is LISTEN. Resolve the listening socket inode from
+# /proc/net/tcp{,6} instead - that path never parses comm.
+proc_net_listener_pids() {
+  case "${PORT:-}" in ''|*[!0-9]*) return 0 ;; esac
+  local port_hex inode_set fd target inode pid
+  port_hex="$(printf '%04X' "$((10#$PORT))")"
+  # st == 0A is LISTEN; field 2 is local_address (hex ip:hex port), field 10 inode.
+  inode_set="$(awk -v p="$port_hex" '$4 == "0A" { split($2, a, ":"); if (toupper(a[2]) == p && $10 != "0") print $10 }' \
+    /proc/net/tcp /proc/net/tcp6 2>/dev/null | sort -u | tr '\n' ' ' || true)"
+  [ -n "$inode_set" ] || return 0
+  inode_set=" ${inode_set} "
+  for fd in /proc/[0-9]*/fd/*; do
+    [ -L "$fd" ] || continue
+    target="$(readlink "$fd" 2>/dev/null)" || continue
+    case "$target" in
+      socket:\[*) inode="${target#socket:[}"; inode="${inode%]}" ;;
+      *) continue ;;
+    esac
+    case "$inode_set" in *" ${inode} "*) ;; *) continue ;; esac
+    pid="${fd#/proc/}"
+    printf '%s\n' "${pid%%/*}"
+  done | sort -u
+}
+
+# Merge the inode scan (primary) with opportunistic lsof/ss results. Every
+# source must be LISTENER-scoped: an unscoped `lsof -ti tcp:$PORT` (or `fuser`)
+# also lists processes holding a client connection to the port - a browser on
+# the dashboard would then be mistaken for the port's owner and refused.
+# `fuser` has no state filter at all, so it is deliberately not used here.
+port_listener_pids() {
+  local pids=""
+  pids="$(proc_net_listener_pids)"
+  if command -v lsof >/dev/null 2>&1; then
+    pids="${pids}
+$(lsof -ti tcp:"${PORT}" -sTCP:LISTEN 2>/dev/null || true)"
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    pids="${pids}
+$(ss -Htnlp "sport = :${PORT}" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 || true)"
+  fi
+  printf '%s\n' "$pids" | tr -s '[:space:]' '\n' | grep -E '^[0-9]+$' | sort -u || true
+}
+
+pid_cmdline() {
+  local pid="$1"
+  if [ -r "/proc/${pid}/cmdline" ]; then
+    tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true
+  else
+    ps -o command= -p "$pid" 2>/dev/null || true
+  fi
+}
+
+pid_cwd() {
+  local pid="$1"
+  if [ -e "/proc/${pid}/cwd" ]; then
+    readlink "/proc/${pid}/cwd" 2>/dev/null || true
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n1 || true
+  fi
+}
+
+# A listener is ours when its cwd/cmdline references a 9router install, or its
+# cwd is a deleted `.9router-*` dir (the launcher orphan case: readlink then
+# yields `/path/.9router-XXXX/app (deleted)`), or a cli.js process is an
+# ancestor. Anything else is foreign and is never killed. Deliberately no
+# bare-`deleted`/`node` heuristic: that would happily kill a foreign process.
+pid_belongs_to_9router() {
+  local pid="$1" cline cwd ancestor
+  cline="$(pid_cmdline "$pid")"
+  case "$cline" in *9router*|*9Router*) return 0 ;; esac
+  cwd="$(pid_cwd "$pid")"
+  case "$cwd" in *9router*|*9Router*|*".9router-"*) return 0 ;; esac
+  [ -r "/proc/${pid}/status" ] || return 1
+  ancestor="$pid"
+  for _ in 1 2 3 4 5 6; do
+    ancestor="$(awk '/^PPid:/ { print $2 }' "/proc/${ancestor}/status" 2>/dev/null || true)"
+    case "$ancestor" in ''|0|1) break ;; esac
+    cline="$(pid_cmdline "$ancestor")"
+    case "$cline" in *cli.js*) return 0 ;; esac
+  done
+  return 1
+}
+
+# Version gate helpers: compare what the live server reports with what landed.
+json_version() {
+  sed -n 's/.*"currentVersion"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1 || true
+}
+
+live_version() {
+  # 5s: /api/version also probes the npm registry (4s timeout) before answering.
+  curl -fsS --max-time 5 "${SERVER_URL}/api/version" 2>/dev/null | json_version || true
+}
+
+# Poll for the served version to match the installed one. Bounded by wall clock,
+# not iterations: /api/version itself can take ~4s when the npm registry is
+# unreachable. Prints the last version it saw either way.
+wait_live_version() {
+  local served="" deadline=$((SECONDS + 25))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    served="$(live_version)"
+    if [ -n "${INSTALLED:-}" ] && [ "$served" = "$INSTALLED" ]; then
+      printf '%s' "$served"
+      return 0
+    fi
+    sleep 0.5
+  done
+  printf '%s' "$served"
+  return 1
+}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -77,7 +190,7 @@ restore_state() {
   [ "$STOPPED" -eq 1 ] || return 0
   [ "$INSTALL_DONE" -eq 1 ] && return 0
   curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1 && return 0
-  warn "install window left the service stopped - restoring it"
+  warn "install window left the server stopped - starting it again in the background"
   if [ -n "${ACS_BIN:-}" ] && "$ACS_BIN" service start 9router --force >/dev/null 2>&1; then
     :
   elif [ -n "${CLI_JS:-}" ] && [ -e "${CLI_JS:-}" ]; then
@@ -86,7 +199,7 @@ restore_state() {
   for _ in $(seq 1 10); do
     sleep 0.5
     if curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; then
-      okay "service healthy again on port ${PORT}"
+      okay "server healthy again on port ${PORT}"
       return 0
     fi
   done
@@ -110,32 +223,51 @@ if [ -n "$ACS_BIN" ]; then
     warn "acs stop failed; falling back to process scan"
   fi
 fi
-# Leftovers outside acs management (non-acs installs) are killed by pattern.
-STOP_CLEAN=1
+# Leftovers outside acs management (non-acs installs) are killed by pattern,
+# then by the actual owner of the listening socket. A listener is only killed
+# when it belongs to a 9Router install; a foreign process holding the port is
+# reported and left alive.
+kill_owned_port_listeners() {
+  local pids pid
+  pids="$(port_listener_pids)"
+  [ -n "$pids" ] || return 0
+  for pid in $pids; do
+    if pid_belongs_to_9router "$pid"; then
+      continue
+    fi
+    warn "port ${PORT} is held by a process that is not 9Router:"
+    warn "  PID ${pid}: $(pid_cmdline "$pid")"
+    warn "  cwd: $(pid_cwd "$pid")"
+    echo "Refusing to kill PID ${pid} (not a 9Router process). Stop it yourself, or pass --port <free port>." >&2
+    exit 1
+  done
+  for pid in $pids; do
+    warn "stopping PID ${pid}"
+    kill -9 "$pid" 2>/dev/null || true
+  done
+}
+
 for _ in 1 2 3 4 5; do
   LEFTOVER="$(pgrep -f 'node_modules/9router' 2>/dev/null || true)"
-  [ -z "$LEFTOVER" ] || STOP_CLEAN=0
-  if [ -z "$LEFTOVER" ] && command -v lsof >/dev/null 2>&1; then
-    LISTENERS="$(lsof -ti tcp:"${PORT}" 2>/dev/null || true)"
-    [ -z "$LISTENERS" ] || STOP_CLEAN=0
-  fi
-  if pgrep -f 'node_modules/9router' >/dev/null 2>&1; then
+  if [ -n "$LEFTOVER" ]; then
     pkill -9 -f "node_modules/9router" 2>/dev/null || true
     warn "killed leftover 9router processes"
-  elif command -v lsof >/dev/null 2>&1 && lsof -ti tcp:"${PORT}" >/dev/null 2>&1; then
-    # shellcheck disable=SC2046
-    kill -9 $(lsof -ti tcp:"${PORT}" 2>/dev/null) 2>/dev/null || true
-    warn "freed port ${PORT}"
-  else
-    break
   fi
+  kill_owned_port_listeners
+  [ -n "$(port_listener_pids)" ] || break
   sleep 1
 done
-if [ "$STOP_CLEAN" -ne 1 ]; then
-  warn "processes kept reappearing - continuing anyway (install is user-dir, unaffected)"
-else
-  okay "nothing is holding port ${PORT} now"
+
+# Never race a listener: the port must be genuinely free before we start.
+STILL_LISTENING="$(port_listener_pids)"
+if [ -n "$STILL_LISTENING" ]; then
+  for pid in $STILL_LISTENING; do
+    warn "still listening on port ${PORT}: PID ${pid} ($(pid_cmdline "$pid"))"
+  done
+  echo "Port ${PORT} is still in use - refusing to start a second server on it." >&2
+  exit 1
 fi
+okay "nothing is holding port ${PORT} now"
 STOPPED=1
 sleep 1
 
@@ -208,7 +340,16 @@ if [ "$VERSION" != "latest" ] && [ "$INSTALLED" != "${VERSION#v}" ]; then
   exit 1
 fi
 
-# 9. Start the service (fully silent, no terminal) ----------------------------
+# Payload assertion: a package that installs without the prebuilt CLI server
+# cannot start, so fail here naming the path instead of timing out on health.
+PAYLOAD="${HOME}/.9router/cli/lib/node_modules/9router/app/.next-cli-build/server"
+if [ ! -d "$PAYLOAD" ]; then
+  echo "Installed package is missing the prebuilt server payload at ${PAYLOAD}" >&2
+  exit 1
+fi
+okay "Prebuilt server payload present"
+
+# 9. Start the server (plain background process, fully silent) ---------------
 if [ "$NO_START" -eq 1 ]; then
   say "-no-start given; start later with: nohup node \"${CLI_JS}\" --tray --skip-update -p ${PORT} >/dev/null 2>&1 &"
   INSTALL_DONE=1
@@ -231,20 +372,59 @@ else
     done
     return 1
   }
+  start_ours() {
+    nohup node "$CLI_JS" --tray --skip-update -p "$PORT" >/dev/null 2>&1 &
+    SPAWNED_PID=$!
+    SPAWNED_PIDS="${SPAWNED_PIDS:-} ${SPAWNED_PID}"
+  }
+  stop_ours() {
+    local pid
+    for pid in ${SPAWNED_PIDS:-}; do
+      kill -9 "$pid" 2>/dev/null || true
+    done
+    SPAWNED_PIDS=""
+  }
   if ! wait_health && [ "$STARTED_VIA_ACS" -ne 1 ]; then
-    warn "Service not healthy yet - spawning manually (nohup, fully silent)"
+    warn "Server not healthy yet - starting it in the background (nohup, fully silent)"
     # nohup + & detaches from this shell: survives terminal close, writes no
     # console output, and starts no terminal on macOS/Linux.
-    nohup node "$CLI_JS" --tray --skip-update -p "$PORT" >/dev/null 2>&1 &
+    start_ours
   fi
-  if wait_health; then
-    okay "Server is healthy at ${SERVER_URL}"
-    INSTALL_DONE=1
-    printf '\n  Dashboard: %s/dashboard\n  Gateway:   %s/v1\n  Data dir:  %s/.9router (untouched by this install)\n' \
-      "$SERVER_URL" "$SERVER_URL" "$HOME"
-  else
+  if ! wait_health; then
+    stop_ours
     warn "Server did not report healthy within 15s. Check: nohup node \"${CLI_JS}\" --tray --skip-update -p ${PORT} >/dev/null 2>&1 &"
+    exit 1
   fi
+  okay "Server is healthy at ${SERVER_URL}"
+
+  # Hard live-version gate: a healthy server can still be the STALE orphan that
+  # survived the stop sweep (its launcher was killed, its next-server child was
+  # not). Never report success for a server that is not serving what we just
+  # installed.
+  SERVED=""
+  if SERVED="$(wait_live_version)"; then
+    okay "Live server reports v${SERVED}"
+  else
+    warn "Live server reports v${SERVED:-<none>}, not the installed v${INSTALLED}"
+    warn "sweeping stale listeners and starting the installed CLI once"
+    kill_owned_port_listeners
+    sleep 1
+    start_ours
+    if wait_health && SERVED="$(wait_live_version)"; then
+      okay "Live server reports v${SERVED}"
+    else
+      stop_ours
+      echo "Install FAILED: installed v${INSTALLED}, but ${SERVER_URL}/api/version reports v${SERVED:-<none>}." >&2
+      echo "The server serving port ${PORT} is not the version this run installed." >&2
+      exit 1
+    fi
+  fi
+
+  INSTALL_DONE=1
+  printf '\n  Installed and started v%s\n' "$INSTALLED"
+  printf '  Dashboard: %s/dashboard\n  Gateway:   %s/v1\n  Data dir:  %s/.9router (untouched by this install)\n' \
+    "$SERVER_URL" "$SERVER_URL" "$HOME"
+  printf '  Stop with: pkill -f "node_modules/9router"\n'
 fi
 
 echo
