@@ -6,8 +6,7 @@
 >
 > Windows (PowerShell):
 > ```powershell
-> irm https://raw.githubusercontent.com/andyvandaric/9router/master/install.ps1 -OutFile 9router-install.ps1
-> powershell -ExecutionPolicy Bypass -File 9router-install.ps1
+> irm https://raw.githubusercontent.com/andyvandaric/9router/master/install.ps1 | iex
 > ```
 >
 > Linux / macOS:
@@ -17,9 +16,9 @@
 >
 > Dalam bahasa Indonesia: installer ini otomatis:
 > 1. **Menghentikan service 9router yang sedang berjalan** — via `acs service stop 9router` bila `acs` tersedia, dengan fallback scan proses + bebas port untuk install non-ACS.
-> 2. **Mengunduh tarball prebuilt** (`9router-latest.tgz`, atau pin versi: `-Version X.Y.Z` / `--version X.Y.Z`).
+> 2. **Mengunduh tarball prebuilt** (`9router-latest.tgz`, atau pin versi: Windows set `$env:NINEROUTER_VERSION='X.Y.Z'` sebelum `irm | iex`; Linux/macOS pakai `--version X.Y.Z`).
 > 3. **Menginstall ke direktori per-user** `~/.9router/cli` — tanpa admin, dan bebas dari error `EBUSY: resource busy or locked, rename` yang menimpa install global di dalam folder nvm/lainnya yang terkunci.
-> 4. **Menambahkan CLI ke PATH** lalu **menyalakan ulang service** (acs-first, fallback manual) dan memverifikasi `/api/health`.
+> 4. **Menambahkan CLI ke PATH** lalu **menyalakan ulang service** (acs-first, fallback manual), memverifikasi `/api/health` hijau, **dan memastikan `/api/version` benar-benar melaporkan versi yang baru dipasang** — installer gagal dengan exit code non-zero kalau server yang menjawab ternyata masih versi lama.
 > 5. Data/DB Anda di `~/.9router` **tidak diganggu sama sekali**.
 >
 > **Pengguna Dashboard ACS**
@@ -157,18 +156,22 @@ Result: Never stop coding, minimal cost + 20-40% token savings via RTK
 
 Windows (PowerShell):
 ```powershell
-irm https://raw.githubusercontent.com/andyvandaric/9router/master/install.ps1 -OutFile 9router-install.ps1
-powershell -ExecutionPolicy Bypass -File 9router-install.ps1
+irm https://raw.githubusercontent.com/andyvandaric/9router/master/install.ps1 | iex
+```
+
+Pin versi tertentu:
+```powershell
+$env:NINEROUTER_VERSION='0.5.121'; irm https://raw.githubusercontent.com/andyvandaric/9router/master/install.ps1 | iex
 ```
 
 Linux / macOS:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/andyvandaric/9router/master/install.sh | bash
 # pin versi tertentu:
-# curl -fsSL https://raw.githubusercontent.com/andyvandaric/9router/master/install.sh | bash -s -- --version 0.5.104
+# curl -fsSL https://raw.githubusercontent.com/andyvandaric/9router/master/install.sh | bash -s -- --version 0.5.121
 ```
 
-Installer ini menghentikan service yang sedang berjalan (via `acs service stop/start 9router` bila ada, fallback proses/OS), menginstall CLI ke `~/.9router/cli` (tanpa admin, anti-`EBUSY`), lalu menyalakan ulang server dan menunggu `/api/health` hijau. Data Anda di `~/.9router` tetap aman.
+Installer ini menghentikan service yang sedang berjalan (via `acs service stop/start 9router` bila ada, fallback proses/OS), menginstall CLI ke `~/.9router/cli` (tanpa admin, anti-`EBUSY`), lalu menyalakan ulang server dan menunggu `/api/health` hijau **dan `/api/version` melaporkan versi yang baru dipasang** — kalau server yang menjawab ternyata masih versi lama, installer berhenti dengan exit code non-zero, bukan diam-diam "sukses". Data Anda di `~/.9router` tetap aman.
 
 Alternatif manual (tidak direkomendasikan di Windows):
 ```bash
